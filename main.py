@@ -5,6 +5,7 @@ from langchain.vectorstores import Chroma
 import discord
 from discord import app_commands
 from dotenv import load_dotenv
+from timeit import default_timer as timer
 
 import os
 import json
@@ -13,9 +14,18 @@ import pathlib
 load_dotenv()
 
 
-DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-PERSIST_DIRECTORY = os.getenv("PERSIST_DIRECTORY")
-EMBEDDINGS_MODEL_NAME = os.getenv("EMBEDDINGS_MODEL_NAME")
+def load(env_var: str) -> str:
+    val = os.getenv(env_var)
+    if val is None:
+        raise ValueError(
+            f"Environment variable {env_var} must be defined in .env or otherwise."
+        )
+    return val
+
+
+DISCORD_TOKEN = load("DISCORD_TOKEN")
+PERSIST_DIRECTORY = load("PERSIST_DIRECTORY")
+EMBEDDINGS_MODEL_NAME = load("EMBEDDINGS_MODEL_NAME")
 
 with open("/home/grads/brendandoney/Thesis/privateGPT/full-mappings.json") as f:
     NAME_TO_URL = json.load(f)
@@ -33,6 +43,8 @@ db = Chroma(
     embedding_function=embeddings,
     client_settings=CHROMA_SETTINGS,
     client=chroma_client,
+    collection_name="docs",
+    collection_metadata={"hnsw:space": "cosine"},
 )
 
 intents = discord.Intents.default()
@@ -55,8 +67,31 @@ client = MyClient(intents=intents)
 @client.event
 async def on_ready():
     print("Running Chroma Bot!")
-    print(f"Logged in as {client.user} (ID: {client.user.id})")
+    print(f"Logged in as {client.user} (ID: {client.user.id})")  # type: ignore
     print("------")
+
+
+SOURCE_CODE_EXT = {
+    ".csv": "text",
+    # "html",
+    ".md": "md",
+    # "txt",
+    # "text",
+    ".java": "java",
+    ".cpp": "cpp",
+    ".h": "cpp",
+    ".py": "python",
+    ".c": "c",
+    ".y": "c",
+    ".cc": "cpp",
+    ".l": "c",
+    ".sh": "bash",
+    "Makefile": "makefile",
+    ".tst": "text",
+    ".js": "js",
+    ".S": "x86asm",
+    ".s": "x86asm",
+}
 
 
 @client.tree.command(description="Ask for documents related to your question")
@@ -66,7 +101,11 @@ async def on_ready():
 async def ask(interaction: discord.Interaction, question: str):
     await interaction.response.defer()
 
+    start = timer()
     docs = await db.asimilarity_search_with_relevance_scores(question)
+    # docs = await db.amax_marginal_relevance_search(question)
+    end = timer()
+    print(f"{end - start}s")
     embeds = []
     for doc, score in docs:
         source = doc.metadata["source"].strip()
@@ -76,16 +115,26 @@ async def ask(interaction: discord.Interaction, question: str):
         doc_name = url.split("/")[-1]
 
         title = f"{score:.2%} {doc_name}"
+        # title = f"{doc_name}"
+        desc = doc.page_content
 
-        if doc_name.split(".")[-1] == "pdf":
+        # To make things consistent b/t ingest.py loaders and source_code_ext keys
+        if "." in doc_name:
+            ext = "." + doc_name.split(".")[-1]
+        else:
+            ext = doc_name
+
+        if ext == ".pdf":
             # Page numbers start at 0 internally, but 1 in links
-            page = int(doc.metadata['page']) + 1
+            page = int(doc.metadata["page"]) + 1
             url += f"#page={page}"
             title += f" - page {page}"
+        elif ext in SOURCE_CODE_EXT:
+            desc = f"```{SOURCE_CODE_EXT[ext]}\n{desc}\n```"
 
-        print(doc)
+        # print(doc)
 
-        embed = discord.Embed(title=title, url=url, description=doc.page_content)
+        embed = discord.Embed(title=title, url=url, description=desc)
         embeds.append(embed)
 
     await interaction.followup.send(f"> {question}", embeds=embeds)
