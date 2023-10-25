@@ -9,7 +9,8 @@ from timeit import default_timer as timer
 
 import os
 import json
-import pathlib
+
+from pdf_images import pdf_image
 
 load_dotenv()
 
@@ -107,6 +108,7 @@ async def ask(interaction: discord.Interaction, question: str):
     end = timer()
     print(f"{end - start}s")
     embeds = []
+    files = []
     for doc, score in docs:
         source = doc.metadata["source"].strip()
         name = source.removeprefix("source_documents/")
@@ -129,15 +131,28 @@ async def ask(interaction: discord.Interaction, question: str):
             page = int(doc.metadata["page"]) + 1
             url += f"#page={page}"
             title += f" - page {page}"
-        elif ext in SOURCE_CODE_EXT:
-            desc = f"```{SOURCE_CODE_EXT[ext]}\n{desc}\n```"
 
-        # print(doc)
+            image_url = pdf_image(doc_name, doc)
+            if image_url is not None:
+                file = discord.File(image_url)
+                files.append(file)
+                embed = discord.Embed(title=title, url=url)
+                embed.set_image(url=f"attachment://{file.filename}")
+            else:
+                embed = discord.Embed(title=title, url=url, description=desc)
+        else:
+            if ext in SOURCE_CODE_EXT:
+                desc = f"```{SOURCE_CODE_EXT[ext]}\n{desc}\n```"
 
-        embed = discord.Embed(title=title, url=url, description=desc)
+            embed = discord.Embed(title=title, url=url, description=desc)
+
         embeds.append(embed)
 
-    await interaction.followup.send(f"> {question}", embeds=embeds)
+    await interaction.followup.send(
+        f"> {question}",
+        files=files,
+        embeds=embeds,
+    )
 
 
 client.run(DISCORD_TOKEN)
