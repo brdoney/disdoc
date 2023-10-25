@@ -1,9 +1,31 @@
-from os.path import isdir
 from typing import List, Optional, Tuple, cast
 import fitz
 import langchain.schema
 import uuid
 import os
+import pickle
+
+__CACHE_FOLDER = "./cache"
+
+# Cached in-memory only
+__cached_textpages = {}
+# Cached on the disk in the `CACHE_FOLDER`
+__cached_images = {}
+__CACHED_IMAGES_PATH = f"{__CACHE_FOLDER}/image-cache.pkl"
+
+
+def save_image_cache() -> None:
+    with open(__CACHED_IMAGES_PATH, "wb") as f:
+        pickle.dump(__cached_images, f)
+
+
+def load_image_cache() -> None:
+    global __cached_images
+    try:
+        with open(__CACHED_IMAGES_PATH, "rb") as f:
+            __cached_images = pickle.load(f)
+    except FileNotFoundError:
+        pass
 
 
 def get_cropped_image(search_results: List[fitz.Rect], page: fitz.Page) -> str:
@@ -23,14 +45,13 @@ def get_cropped_image(search_results: List[fitz.Rect], page: fitz.Page) -> str:
     padding_box.y1 += padding
     pixels = page.get_pixmap(clip=padding_box)  # type: ignore
 
-    image_name = f"./image-{uuid.uuid4()}.png"
+    if not os.path.isdir(__CACHE_FOLDER):
+        os.mkdir(__CACHE_FOLDER)
+
+    image_name = f"{__CACHE_FOLDER}/image-{uuid.uuid4()}.png"
     pixels.save(image_name)
 
     return image_name
-
-
-__cached_textpages = {}
-__cached_images = {}
 
 
 def __search_pdf(
@@ -43,6 +64,8 @@ def __search_pdf(
     if key in __cached_textpages:
         tp = __cached_textpages[key]
     else:
+        # Preserve whitespace is overkill b/c converting to text is lossy
+        # Ligatures not necessary b/c users will never put ligatures in their questions
         tp = page.get_textpage(
             flags=fitz.TEXT_DEHYPHENATE
             # | fitz.TEXT_PRESERVE_WHITESPACE
@@ -77,11 +100,11 @@ def pdf_image(doc_name: str, document: langchain.schema.Document) -> Optional[st
         for rect in rects:
             page.add_highlight_annot(rect)
 
-        if not os.path.isdir("./pdf_images"):
-            os.mkdir("./pdf_images")
+        if not os.path.isdir(__CACHE_FOLDER):
+            os.mkdir(__CACHE_FOLDER)
 
-        image_name = f"./pdf_images/image-{uuid.uuid4()}.png"
-        page.get_pixmap().save(image_name)  # type: ignore
+        image_name = f"{__CACHE_FOLDER}/image-{uuid.uuid4()}.png"
+        page.get_pixmap(dpi=144).save(image_name)  # type: ignore
 
         __cached_images[key] = image_name
 

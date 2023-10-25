@@ -10,7 +10,7 @@ from timeit import default_timer as timer
 import os
 import json
 
-from pdf_images import pdf_image
+from pdf_images import pdf_image, save_image_cache, load_image_cache
 
 load_dotenv()
 
@@ -155,4 +155,12 @@ async def ask(interaction: discord.Interaction, question: str):
     )
 
 
-client.run(DISCORD_TOKEN)
+# Load the docment -> image translations from memory
+load_image_cache()
+
+try:
+    client.run(DISCORD_TOKEN)
+finally:
+    # We've loaded and maybe modified the image cache, so we need to save it
+    print("Saving pdf image cache")
+    save_image_cache()
