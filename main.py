@@ -6,6 +6,7 @@ import discord
 from discord import app_commands
 from dotenv import load_dotenv
 from timeit import default_timer as timer
+from urllib.parse import ParseResult, urlencode, urlparse, parse_qsl
 
 import os
 import json
@@ -27,8 +28,9 @@ def load(env_var: str) -> str:
 DISCORD_TOKEN = load("DISCORD_TOKEN")
 PERSIST_DIRECTORY = load("PERSIST_DIRECTORY")
 EMBEDDINGS_MODEL_NAME = load("EMBEDDINGS_MODEL_NAME")
+MAPPINGS_PATH = load("MAPPINGS_PATH")
 
-with open("/home/grads/brendandoney/Thesis/privateGPT/full-mappings.json") as f:
+with open(MAPPINGS_PATH) as f:
     NAME_TO_URL = json.load(f)
 
 embeddings = HuggingFaceEmbeddings(model_name=EMBEDDINGS_MODEL_NAME)
@@ -95,6 +97,27 @@ SOURCE_CODE_EXT = {
 }
 
 
+def add_query_param(url: ParseResult, name: str, value: str) -> ParseResult:
+    """Create a new URL from `url`, with the name and value pair added to the
+    query params.
+
+    If a query param with the given name already exists, this
+    function adds to it (so there will be multiple entries for it, the
+    original(s) and new one) instead of overwriting its existing value.
+
+    Args:
+        url: the url to copy
+        name: the name of the query parameter
+        value: the value to add
+
+    Returns:
+        a copy of the given url with the new name, value pair added to the query params
+    """
+    query = parse_qsl(url.query)
+    query.append((name, value))
+    return url._replace(query=urlencode(query))
+
+
 @client.tree.command(description="Ask for documents related to your question")
 @app_commands.describe(
     question="Question or statement you want to find documents regarding"
@@ -109,15 +132,18 @@ async def ask(interaction: discord.Interaction, question: str):
     print(f"{end - start}s")
     embeds = []
     files = []
-    for doc, score in docs:
+    for i, (doc, score) in enumerate(docs):
         source = doc.metadata["source"].strip()
         name = source.removeprefix("source_documents/")
 
-        url = NAME_TO_URL[name]
-        doc_name = url.split("/")[-1]
+        url_str = NAME_TO_URL[name]
+        url = add_query_param(urlparse(url_str), "rec_id", str(i))
 
+        doc_name = url.path.split("/")[-1]
+        # Note: score is only accurate if we're using cosine as our similarity metric
         title = f"{score:.2%} {doc_name}"
         # title = f"{doc_name}"
+
         desc = doc.page_content
 
         # To make things consistent b/t ingest.py loaders and source_code_ext keys
@@ -129,22 +155,22 @@ async def ask(interaction: discord.Interaction, question: str):
         if ext == ".pdf":
             # Page numbers start at 0 internally, but 1 in links
             page = int(doc.metadata["page"]) + 1
-            url += f"#page={page}"
+            url = url._replace(fragment=f"page={page}")
             title += f" - page {page}"
 
             image_url = pdf_image(doc_name, doc)
             if image_url is not None:
                 file = discord.File(image_url)
                 files.append(file)
-                embed = discord.Embed(title=title, url=url)
+                embed = discord.Embed(title=title, url=url.geturl())
                 embed.set_image(url=f"attachment://{file.filename}")
             else:
-                embed = discord.Embed(title=title, url=url, description=desc)
+                embed = discord.Embed(title=title, url=url.geturl(), description=desc)
         else:
             if ext in SOURCE_CODE_EXT:
                 desc = f"```{SOURCE_CODE_EXT[ext]}\n{desc}\n```"
 
-            embed = discord.Embed(title=title, url=url, description=desc)
+            embed = discord.Embed(title=title, url=url.geturl(), description=desc)
 
         embeds.append(embed)
 
