@@ -1,0 +1,16 @@
+.java
+.cpp
+.h
+.py
+.c
+.y
+.txt
+.text
+.cc
+.l
+.s
+.sh
+Makefile
+.tst
+.js
+.S
