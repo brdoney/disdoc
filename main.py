@@ -1,3 +1,4 @@
+from typing import List, Optional
 import chromadb
 from chromadb.config import Settings
 from langchain.embeddings import HuggingFaceEmbeddings
@@ -16,11 +17,15 @@ from pdf_images import pdf_image, save_image_cache, load_image_cache
 load_dotenv()
 
 
-def load(env_var: str) -> str:
+def load(env_var: str, choices: Optional[List[str]] = None) -> str:
     val = os.getenv(env_var)
     if val is None:
         raise ValueError(
             f"Environment variable {env_var} must be defined in .env or otherwise."
+        )
+    if choices is not None and val not in choices:
+        raise ValueError(
+            f"Value {val} for {env_var} not valid. Valid choices are: {choices}"
         )
     return val
 
@@ -29,6 +34,7 @@ DISCORD_TOKEN = load("DISCORD_TOKEN")
 PERSIST_DIRECTORY = load("PERSIST_DIRECTORY")
 EMBEDDINGS_MODEL_NAME = load("EMBEDDINGS_MODEL_NAME")
 MAPPINGS_PATH = load("MAPPINGS_PATH")
+SIMILARITY_METRIC = load("SIMILARITY_METRIC", ["cosine", "l2", "ip"])
 
 with open(MAPPINGS_PATH) as f:
     NAME_TO_URL = json.load(f)
@@ -47,7 +53,7 @@ db = Chroma(
     client_settings=CHROMA_SETTINGS,
     client=chroma_client,
     collection_name="docs",
-    collection_metadata={"hnsw:space": "cosine"},
+    collection_metadata={"hnsw:space": SIMILARITY_METRIC},
 )
 
 intents = discord.Intents.default()
@@ -130,6 +136,7 @@ async def ask(interaction: discord.Interaction, question: str):
     # docs = await db.amax_marginal_relevance_search(question)
     end = timer()
     print(f"{end - start}s")
+
     embeds = []
     files = []
     for i, (doc, score) in enumerate(docs):
