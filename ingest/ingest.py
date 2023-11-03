@@ -2,9 +2,10 @@
 import glob
 from multiprocessing import Pool
 import os
-from typing import Any, Dict, List, Optional
+from typing import List
 
 import chromadb
+import chromadb.config
 from dotenv import load_dotenv
 import fitz
 from langchain.docstore.document import Document
@@ -29,8 +30,7 @@ from langchain.vectorstores import Chroma
 from tqdm import tqdm
 import importlib.util
 
-from constants import CHROMA_SETTINGS
-
+# Will share dotenv with outer directory
 if not load_dotenv():
     print(
         "Could not load .env file or it is empty. Please check if it exists and is readable."
@@ -48,11 +48,11 @@ def load_env(env_var: str, *args) -> str:
 
 
 # Load environment variables
-persist_directory = load_env("PERSIST_DIRECTORY")
-source_directory = load_env("SOURCE_DIRECTORY", "source_documents")
-embeddings_model_name = load_env("EMBEDDINGS_MODEL_NAME")
-chunk_size = 500
-chunk_overlap = 50
+PERSIST_DIRECTORY = load_env("PERSIST_DIRECTORY")
+SOURCE_DIRECTORY = load_env("SOURCE_DIRECTORY", "source_documents")
+EMBEDDINGS_MODEL_NAME = load_env("EMBEDDINGS_MODEL_NAME")
+CHUNK_SIZE = 500
+CHUNK_OVERLAP = 50
 
 
 # Custom document loaders
@@ -176,17 +176,17 @@ def process_documents(ignored_files: List[str] = []) -> List[Document]:
     """
     Load documents and split in chunks
     """
-    print(f"Loading documents from {source_directory}")
-    documents = load_documents(source_directory, ignored_files)
+    print(f"Loading documents from {SOURCE_DIRECTORY}")
+    documents = load_documents(SOURCE_DIRECTORY, ignored_files)
     if not documents:
         print("No new documents to load")
         exit(0)
-    print(f"Loaded {len(documents)} new documents from {source_directory}")
+    print(f"Loaded {len(documents)} new documents from {SOURCE_DIRECTORY}")
     text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=chunk_size, chunk_overlap=chunk_overlap
+        chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP
     )
     texts = text_splitter.split_documents(documents)
-    print(f"Split into {len(texts)} chunks of text (max. {chunk_size} tokens each)")
+    print(f"Split into {len(texts)} chunks of text (max. {CHUNK_SIZE} tokens each)")
     return texts
 
 
@@ -204,19 +204,23 @@ def does_vectorstore_exist(
 
 def main():
     # Create embeddings
-    embeddings = HuggingFaceEmbeddings(model_name=embeddings_model_name)
+    embeddings = HuggingFaceEmbeddings(model_name=EMBEDDINGS_MODEL_NAME)
+
     # Chroma client
+    chroma_settings = chromadb.config.Settings(
+        persist_directory=PERSIST_DIRECTORY, anonymized_telemetry=False
+    )
     chroma_client = chromadb.PersistentClient(
-        settings=CHROMA_SETTINGS, path=persist_directory
+        settings=chroma_settings, path=PERSIST_DIRECTORY
     )
 
-    if does_vectorstore_exist(persist_directory, embeddings):
+    if does_vectorstore_exist(PERSIST_DIRECTORY, embeddings):
         # Update and store locally vectorstore
-        print(f"Appending to existing vectorstore at {persist_directory}")
+        print(f"Appending to existing vectorstore at {PERSIST_DIRECTORY}")
         db = Chroma(
-            persist_directory=persist_directory,
+            persist_directory=PERSIST_DIRECTORY,
             embedding_function=embeddings,
-            client_settings=CHROMA_SETTINGS,
+            client_settings=chroma_settings,
             client=chroma_client,
         )
         collection = db.get()
@@ -233,8 +237,8 @@ def main():
         db = Chroma.from_documents(
             texts,
             embeddings,
-            persist_directory=persist_directory,
-            client_settings=CHROMA_SETTINGS,
+            persist_directory=PERSIST_DIRECTORY,
+            client_settings=chroma_settings,
             client=chroma_client,
             # Use cos sim instead of l2 (default), since we're doing doc retrieval
             collection_metadata={"hnsw:space": "cosine"},
