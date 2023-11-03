@@ -164,3 +164,4 @@ cache/
 
 # Persisted database
 db/
+source_documents/

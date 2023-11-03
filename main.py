@@ -1,58 +1,52 @@
-from typing import List, Optional
+import enum
+import json
+from timeit import default_timer as timer
+from urllib.parse import ParseResult, parse_qsl, urlencode, urlparse
+
 import chromadb
-from chromadb.config import Settings
-from langchain.embeddings import HuggingFaceEmbeddings
-from langchain.vectorstores import Chroma
+import chromadb.config
 import discord
 from discord import app_commands
 from dotenv import load_dotenv
-from timeit import default_timer as timer
-from urllib.parse import ParseResult, urlencode, urlparse, parse_qsl
+from langchain.embeddings import HuggingFaceEmbeddings
+from langchain.vectorstores import Chroma
 
-import os
-import json
-
-from pdf_images import pdf_image, save_image_cache, load_image_cache
+from env_var import load_env
+from pdf_images import load_image_cache, pdf_image, save_image_cache
 
 load_dotenv()
 
-
-def load(env_var: str, choices: Optional[List[str]] = None) -> str:
-    val = os.getenv(env_var)
-    if val is None:
-        raise ValueError(
-            f"Environment variable {env_var} must be defined in .env or otherwise."
-        )
-    if choices is not None and val not in choices:
-        raise ValueError(
-            f"Value {val} for {env_var} not valid. Valid choices are: {choices}"
-        )
-    return val
-
-
-DISCORD_TOKEN = load("DISCORD_TOKEN")
-PERSIST_DIRECTORY = load("PERSIST_DIRECTORY")
-EMBEDDINGS_MODEL_NAME = load("EMBEDDINGS_MODEL_NAME")
-MAPPINGS_PATH = load("MAPPINGS_PATH")
-SIMILARITY_METRIC = load("SIMILARITY_METRIC", ["cosine", "l2", "ip"])
+DISCORD_TOKEN = load_env("DISCORD_TOKEN")
+PERSIST_DIRECTORY = load_env("PERSIST_DIRECTORY")
+EMBEDDINGS_MODEL_NAME = load_env("EMBEDDINGS_MODEL_NAME")
+MAPPINGS_PATH = load_env("MAPPINGS_PATH")
+SIMILARITY_METRIC = load_env("SIMILARITY_METRIC", choices=["cosine", "l2", "ip"])
 
 with open(MAPPINGS_PATH) as f:
     NAME_TO_URL = json.load(f)
 
 embeddings = HuggingFaceEmbeddings(model_name=EMBEDDINGS_MODEL_NAME)
-CHROMA_SETTINGS = Settings(
+CHROMA_SETTINGS = chromadb.config.Settings(
     persist_directory=PERSIST_DIRECTORY, anonymized_telemetry=False
 )
 
 chroma_client = chromadb.PersistentClient(
     settings=CHROMA_SETTINGS, path=PERSIST_DIRECTORY
 )
-db = Chroma(
-    persist_directory=PERSIST_DIRECTORY,
-    embedding_function=embeddings,
-    client_settings=CHROMA_SETTINGS,
-    client=chroma_client,
+docs_db = Chroma(
     collection_name="docs",
+    client=chroma_client,
+    embedding_function=embeddings,
+    persist_directory=PERSIST_DIRECTORY,
+    client_settings=CHROMA_SETTINGS,
+    collection_metadata={"hnsw:space": SIMILARITY_METRIC},
+)
+tests_db = Chroma(
+    collection_name="tests",
+    client=chroma_client,
+    embedding_function=embeddings,
+    persist_directory=PERSIST_DIRECTORY,
+    client_settings=CHROMA_SETTINGS,
     collection_metadata={"hnsw:space": SIMILARITY_METRIC},
 )
 
@@ -124,15 +118,32 @@ def add_query_param(url: ParseResult, name: str, value: str) -> ParseResult:
     return url._replace(query=urlencode(query))
 
 
+with open("./categories.txt", "r") as f:
+    AskCategory = enum.Enum("AskCategory", [line.strip() for line in f.readlines()])
+
+
 @client.tree.command(description="Ask for documents related to your question")
 @app_commands.describe(
     question="Question or statement you want to find documents regarding"
 )
-async def ask(interaction: discord.Interaction, question: str):
+async def ask(
+    interaction: discord.Interaction, category: AskCategory, question: str  # type: ignore
+):
     await interaction.response.defer()
 
     start = timer()
-    docs = await db.asimilarity_search_with_relevance_scores(question)
+    if category == AskCategory.tests:
+        docs = await tests_db.asimilarity_search_with_relevance_scores(question)
+    elif category == AskCategory.midterm:
+        docs = await tests_db.asimilarity_search_with_relevance_scores(
+            question, filter={"type": "midterm"}
+        )
+    elif category == AskCategory.final:
+        docs = await tests_db.asimilarity_search_with_relevance_scores(
+            question, filter={"type": "final"}
+        )
+    else:
+        docs = await docs_db.asimilarity_search_with_relevance_scores(question)
     # docs = await db.amax_marginal_relevance_search(question)
     end = timer()
     print(f"{end - start}s")

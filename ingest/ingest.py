@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
+from enum import Enum
+from functools import partial
 import glob
+import importlib.util
 from multiprocessing import Pool
 import os
-from typing import List
+from typing import List, NamedTuple, Tuple
+from pathlib import Path
 
 import chromadb
 import chromadb.config
@@ -10,6 +14,7 @@ from dotenv import load_dotenv
 import fitz
 from langchain.docstore.document import Document
 from langchain.document_loaders import (
+    Blob,
     CSVLoader,
     EverNoteLoader,
     TextLoader,
@@ -20,15 +25,15 @@ from langchain.document_loaders import (
     UnstructuredODTLoader,
     UnstructuredPowerPointLoader,
     UnstructuredWordDocumentLoader,
-    Blob,
 )
 from langchain.document_loaders.parsers.pdf import PyMuPDFParser
 from langchain.document_loaders.pdf import BasePDFLoader
 from langchain.embeddings import HuggingFaceEmbeddings
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain.text_splitter import RecursiveCharacterTextSplitter, TextSplitter
 from langchain.vectorstores import Chroma
 from tqdm import tqdm
-import importlib.util
+
+from env_var import load_env
 
 # Will share dotenv with outer directory
 if not load_dotenv():
@@ -38,19 +43,11 @@ if not load_dotenv():
     exit(1)
 
 
-def load_env(env_var: str, *args) -> str:
-    val = os.getenv(env_var, *args)
-    if val is None:
-        raise ValueError(
-            f"Environment variable {env_var} must be defined in .env or otherwise."
-        )
-    return val
-
-
 # Load environment variables
 PERSIST_DIRECTORY = load_env("PERSIST_DIRECTORY")
 SOURCE_DIRECTORY = load_env("SOURCE_DIRECTORY", "source_documents")
 EMBEDDINGS_MODEL_NAME = load_env("EMBEDDINGS_MODEL_NAME")
+SIMILARITY_METRIC = load_env("SIMILARITY_METRIC", choices=["cosine", "l2", "ip"])
 CHUNK_SIZE = 500
 CHUNK_OVERLAP = 50
 
@@ -120,24 +117,54 @@ LOADER_MAPPING = {
 }
 
 # Extend with our extra filetypes (i.e. code) that will fall back to text loader
-with open("./text_loader.txt") as f:
+file_dir = Path(__file__).parent
+with (file_dir / "text_loader.txt").open("r") as f:
     for line in f.readlines():
         LOADER_MAPPING[line.strip()] = (TextLoader, {"encoding": "utf8"})
 
 print(LOADER_MAPPING.keys())
 
 
-def load_single_document(file_path: str) -> List[Document]:
+class DocumentType(Enum):
+    Doc = 1
+    Test = 2
+
+
+class SegregatedDocuments(NamedTuple):
+    docs: List[Document]
+    tests: List[Document]
+
+
+def load_single_document(
+    splitter: TextSplitter, file_path: str
+) -> Tuple[DocumentType, List[Document]]:
     ext = "." + file_path.rsplit(".", 1)[-1].lower()
     if ext in LOADER_MAPPING:
         loader_class, loader_args = LOADER_MAPPING[ext]
         loader = loader_class(file_path, **loader_args)
-        return loader.load()
+        documents: List[Document] = loader.load_and_split(splitter)
+
+        # midterm = midterm, final = final,
+        # test = anything else (e.g. Test_1 back when we did multiple tests per sem)
+        for key in ["midterm", "final", "test"]:
+            if key in file_path.lower():
+                doc_type = DocumentType.Test
+                for doc in documents:
+                    doc.metadata["type"] = key
+                    break
+        else:
+            doc_type = DocumentType.Doc
+            for doc in documents:
+                doc.metadata["type"] = "doc"
+
+        return doc_type, documents
 
     raise ValueError(f"Unsupported file extension '{ext}'")
 
 
-def load_documents(source_dir: str, ignored_files: List[str] = []) -> List[Document]:
+def load_documents(
+    source_dir: str, ignored_files: List[str] = []
+) -> SegregatedDocuments:
     """
     Loads all documents from the source documents directory, ignoring specified files
     """
@@ -150,44 +177,49 @@ def load_documents(source_dir: str, ignored_files: List[str] = []) -> List[Docum
             glob.glob(os.path.join(source_dir, f"**/*{ext.upper()}"), recursive=True)
         )
     filtered_files = [
-        file_path
-        for file_path in all_files
-        if file_path not in ignored_files
-        and "final" not in file_path.lower()
-        and "midterm" not in file_path.lower()
-        and "test" not in file_path.lower()
+        file_path for file_path in all_files if file_path not in ignored_files
     ]
+    if len(filtered_files) == 0:
+        print("No new documents to load")
+        exit(0)
+
+    print(f"Loading {len(filtered_files)} new documents from {SOURCE_DIRECTORY}")
+    # print(filtered_files)
+
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP
+    )
+    load = partial(load_single_document, text_splitter)
 
     with Pool(processes=os.cpu_count()) as pool:
-        results = []
+        docs = []
+        tests = []
         with tqdm(
             total=len(filtered_files), desc="Loading new documents", ncols=80
         ) as pbar:
-            for _, docs in enumerate(
-                pool.imap_unordered(load_single_document, filtered_files)
-            ):
-                results.extend(docs)
+            for doc_type, docs in pool.imap_unordered(load, filtered_files):
+                if doc_type == DocumentType.Test:
+                    tests.extend(docs)
+                elif doc_type == DocumentType.Doc:
+                    docs.extend(docs)
+                else:
+                    raise ValueError(f"Unsupported document type {doc_type}")
                 pbar.update()
 
-    return results
+    total_chunks = len(docs) + len(tests)
+    print(
+        f"Loaded and split into {total_chunks} chunks of text (max. {CHUNK_SIZE} tokens each)"
+    )
+
+    return SegregatedDocuments(docs, tests)
 
 
-def process_documents(ignored_files: List[str] = []) -> List[Document]:
+def process_documents(ignored_files: List[str] = []) -> SegregatedDocuments:
     """
     Load documents and split in chunks
     """
     print(f"Loading documents from {SOURCE_DIRECTORY}")
-    documents = load_documents(SOURCE_DIRECTORY, ignored_files)
-    if not documents:
-        print("No new documents to load")
-        exit(0)
-    print(f"Loaded {len(documents)} new documents from {SOURCE_DIRECTORY}")
-    text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP
-    )
-    texts = text_splitter.split_documents(documents)
-    print(f"Split into {len(texts)} chunks of text (max. {CHUNK_SIZE} tokens each)")
-    return texts
+    return load_documents(SOURCE_DIRECTORY, ignored_files)
 
 
 def does_vectorstore_exist(
@@ -217,37 +249,65 @@ def main():
     if does_vectorstore_exist(PERSIST_DIRECTORY, embeddings):
         # Update and store locally vectorstore
         print(f"Appending to existing vectorstore at {PERSIST_DIRECTORY}")
-        db = Chroma(
+        docs_db = Chroma(
+            collection_name="docs",
             persist_directory=PERSIST_DIRECTORY,
             embedding_function=embeddings,
             client_settings=chroma_settings,
             client=chroma_client,
+            collection_metadata={"hnsw:space": SIMILARITY_METRIC},
         )
-        collection = db.get()
+        tests_db = Chroma(
+            collection_name="tests",
+            persist_directory=PERSIST_DIRECTORY,
+            embedding_function=embeddings,
+            client_settings=chroma_settings,
+            client=chroma_client,
+            collection_metadata={"hnsw:space": SIMILARITY_METRIC},
+        )
+        collection = docs_db.get()
         texts = process_documents(
             [metadata["source"] for metadata in collection["metadatas"]]
         )
-        print("Creating embeddings. May take some minutes...")
-        db.add_documents(texts)
+        print(
+            f"Creating embeddings for {len(texts.docs)} new course documents. May take some minutes..."
+        )
+        docs_db.add_documents(texts.docs)
+        print(
+            f"Creating embeddings for {len(texts.tests)} new tests. May take some minutes..."
+        )
+        tests_db.add_documents(texts.tests)
     else:
         # Create and store locally vectorstore
         print("Creating new vectorstore")
         texts = process_documents()
         print("Creating embeddings. May take some minutes...")
-        db = Chroma.from_documents(
-            texts,
+        docs_db = Chroma.from_documents(
+            texts.docs,
             embeddings,
             persist_directory=PERSIST_DIRECTORY,
             client_settings=chroma_settings,
             client=chroma_client,
             # Use cos sim instead of l2 (default), since we're doing doc retrieval
-            collection_metadata={"hnsw:space": "cosine"},
+            collection_metadata={"hnsw:space": SIMILARITY_METRIC},
             collection_name="docs",
         )
-    db.persist()
-    db = None
+        tests_db = Chroma.from_documents(
+            texts.tests,
+            embeddings,
+            persist_directory=PERSIST_DIRECTORY,
+            client_settings=chroma_settings,
+            client=chroma_client,
+            # Use cos sim instead of l2 (default), since we're doing doc retrieval
+            collection_metadata={"hnsw:space": SIMILARITY_METRIC},
+            collection_name="docs",
+        )
+    docs_db.persist()
+    docs_db = None
+    tests_db.persist()
+    tests_db = None
 
-    print("Ingestion complete! You can now run privateGPT.py to query your documents")
+    print("Ingestion complete!")
 
 
 if __name__ == "__main__":
