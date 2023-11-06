@@ -170,6 +170,5 @@ db/
 
 # Document info
 source_documents/
-docs.txt
-tests.txt
+records/
 blacklist.txt

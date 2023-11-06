@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
+from datetime import datetime
 from enum import Enum
-from functools import partial
 import glob
 import importlib.util
 from multiprocessing import Pool
 import os
-from typing import List, Literal, NamedTuple, Set, Tuple, Union
 from pathlib import Path
+from typing import List, Literal, NamedTuple, Set, Tuple, Union
 
 import chromadb
-import chromadb.config
 import chromadb.api
+import chromadb.config
 from dotenv import load_dotenv
 import fitz
 from langchain.docstore.document import Document
@@ -30,8 +30,7 @@ from langchain.document_loaders import (
 from langchain.document_loaders.parsers.pdf import PyMuPDFParser
 from langchain.document_loaders.pdf import BasePDFLoader
 from langchain.embeddings import HuggingFaceEmbeddings
-from langchain.embeddings.base import Embeddings
-from langchain.text_splitter import RecursiveCharacterTextSplitter, TextSplitter
+from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.vectorstores import Chroma
 from tqdm import tqdm
 
@@ -40,7 +39,8 @@ from env_var import load_env
 # Will share dotenv with outer directory
 if not load_dotenv():
     print(
-        "Could not load .env file or it is empty. Please check if it exists and is readable."
+        "Could not load .env file or it is empty."
+        "Please check if it exists and is readable."
     )
     exit(1)
 
@@ -153,6 +153,13 @@ def load_single_document(
     Tuple[Literal[DocumentType.Empty], str],
     Tuple[Literal[DocumentType.Doc, DocumentType.Test], List[Document]],
 ]:
+    """Load a single document and split it into chunks from the given file path.
+
+    If the file splits into zero chunks (the file doesn't contain text), simply
+    returns this along with the file path.
+    If the file does split into chunks, this returns what type of file it is
+    along with a list of the chunks.
+    """
     text_splitter = RecursiveCharacterTextSplitter(
         chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP
     )
@@ -258,6 +265,7 @@ def does_vectorstore_exist(
 
 
 def get_stored_file_sources(collections: List[Chroma]) -> List[str]:
+    """Get a list of the paths to all the files stored in the given collections."""
     sources = []
     for collection in collections:
         data = collection.get()
@@ -266,19 +274,43 @@ def get_stored_file_sources(collections: List[Chroma]) -> List[str]:
 
 
 def get_file_sources(docs: List[Document]) -> Set[str]:
+    """Get a set of all of the file sources for the given list."""
     return {doc.metadata["source"] + "\n" for doc in docs}
 
 
 def write_sources(docs: SegregatedDocuments) -> None:
-    with open("docs.txt", "w") as f:
-        f.writelines(get_file_sources(docs.docs))
-    with open("tests.txt", "w") as f:
-        f.writelines(get_file_sources(docs.tests))
+    """Write the path of each file that was added to the database in this run
+    (based on the given docs).
+
+    This will add to the docs.txt and tests.txt in the records directory and
+    create timestamped <date>-docs.txt and <date>-tests.txt files in the
+    records directory with just the files added in this run.
+    """
+    print("Adding the sources that were added to the database")
+
+    records = Path("./records")
+    records.mkdir(exist_ok=True)
+
+    docs_sources = get_file_sources(docs.docs)
+    tests_sources = get_file_sources(docs.tests)
+
+    with (records / "docs.txt").open("a+") as f:
+        f.writelines(docs_sources)
+    with (records / "tests.txt").open("a+") as f:
+        f.writelines(tests_sources)
+
+    # Write the indiviual logs
+    dt = datetime.strftime(datetime.now(), "%Y-%m-%d-%H.%M.%S")
+    with (records / f"{dt}-docs.txt").open("w") as f:
+        f.writelines(docs_sources)
+    with (records / f"{dt}-tests.txt").open("w") as f:
+        f.writelines(tests_sources)
 
 
 def add_documents(
     collection: Chroma, collection_name: str, docs: List[Document]
 ) -> None:
+    """Add documents to the given collection or do nothing if no documents are given."""
     if len(docs) == 0:
         print(f"No new documents for collection {collection_name}")
         return
