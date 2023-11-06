@@ -152,9 +152,8 @@ async def ask(
     files = []
     for i, (doc, score) in enumerate(docs):
         source = doc.metadata["source"].strip()
-        name = source.removeprefix("source_documents/")
 
-        url_str = NAME_TO_URL[name]
+        url_str = NAME_TO_URL[source.removeprefix("source_documents/")]
         url = add_query_param(urlparse(url_str), "rec_id", str(i))
 
         doc_name = url.path.split("/")[-1]
@@ -176,7 +175,7 @@ async def ask(
             url = url._replace(fragment=f"page={page}")
             title += f" - page {page}"
 
-            image_url = pdf_image(doc_name, doc)
+            image_url = pdf_image(source, doc)
             if image_url is not None:
                 file = discord.File(image_url)
                 files.append(file)

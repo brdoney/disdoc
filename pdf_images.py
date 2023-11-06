@@ -79,14 +79,12 @@ def __search_pdf(
     return None
 
 
-def pdf_image(doc_name: str, document: langchain.schema.Document) -> Optional[str]:
+def pdf_image(doc_path: str, document: langchain.schema.Document) -> Optional[str]:
     key = document.metadata["source"] + document.page_content
     if key in __cached_images:
         return __cached_images[key]
 
-    with fitz.open(  # type: ignore
-        f"/home/grads/brendandoney/Thesis/privateGPT/source_documents/{doc_name}"
-    ) as pdf:
+    with fitz.open(doc_path) as pdf:  # type: ignore
         pdf = cast(fitz.Document, pdf)
 
         # print(page.get_textpage().extractText())

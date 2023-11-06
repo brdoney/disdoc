@@ -218,7 +218,6 @@ def load_documents(
     # print(filtered_files)
 
     print(f"Loading {len(filtered_files)} new documents from {SOURCE_DIRECTORY}")
-    print(filtered_files)
 
     with Pool(processes=os.cpu_count()) as pool:
         docs: List[Document] = []
@@ -242,7 +241,7 @@ def load_documents(
 
     print(
         f"Loaded and split into {len(docs)} chunks of text for docs"
-        f" and {len(tests)} of text for tests (max. {CHUNK_SIZE} tokens each)"
+        f" and {len(tests)} chunks of text for tests (max. {CHUNK_SIZE} tokens each)"
     )
 
     # print(docs)
