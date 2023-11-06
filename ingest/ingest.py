@@ -5,11 +5,12 @@ import glob
 import importlib.util
 from multiprocessing import Pool
 import os
-from typing import List, NamedTuple, Tuple
+from typing import List, Literal, NamedTuple, Set, Tuple, Union
 from pathlib import Path
 
 import chromadb
 import chromadb.config
+import chromadb.api
 from dotenv import load_dotenv
 import fitz
 from langchain.docstore.document import Document
@@ -29,6 +30,7 @@ from langchain.document_loaders import (
 from langchain.document_loaders.parsers.pdf import PyMuPDFParser
 from langchain.document_loaders.pdf import BasePDFLoader
 from langchain.embeddings import HuggingFaceEmbeddings
+from langchain.embeddings.base import Embeddings
 from langchain.text_splitter import RecursiveCharacterTextSplitter, TextSplitter
 from langchain.vectorstores import Chroma
 from tqdm import tqdm
@@ -50,6 +52,11 @@ EMBEDDINGS_MODEL_NAME = load_env("EMBEDDINGS_MODEL_NAME")
 SIMILARITY_METRIC = load_env("SIMILARITY_METRIC", choices=["cosine", "l2", "ip"])
 CHUNK_SIZE = 500
 CHUNK_OVERLAP = 50
+
+# Chroma settings, used in client
+CHROMA_SETTINGS = chromadb.config.Settings(
+    persist_directory=PERSIST_DIRECTORY, anonymized_telemetry=False
+)
 
 
 # Custom document loaders
@@ -127,7 +134,12 @@ print(LOADER_MAPPING.keys())
 
 class DocumentType(Enum):
     Doc = 1
+    """A course document (e.g. FAQ page, assignment spec) that generated chunks"""
     Test = 2
+    """PDF of a past test"""
+    Empty = 3
+    """A document of any type that generated no chunks. Usually happens when a
+    document consists of just images, since no OCR is performed right now."""
 
 
 class SegregatedDocuments(NamedTuple):
@@ -136,27 +148,38 @@ class SegregatedDocuments(NamedTuple):
 
 
 def load_single_document(
-    splitter: TextSplitter, file_path: str
-) -> Tuple[DocumentType, List[Document]]:
+    file_path: str,
+) -> Union[
+    Tuple[Literal[DocumentType.Empty], str],
+    Tuple[Literal[DocumentType.Doc, DocumentType.Test], List[Document]],
+]:
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP
+    )
+
     ext = "." + file_path.rsplit(".", 1)[-1].lower()
     if ext in LOADER_MAPPING:
         loader_class, loader_args = LOADER_MAPPING[ext]
         loader = loader_class(file_path, **loader_args)
-        documents: List[Document] = loader.load_and_split(splitter)
+        documents: List[Document] = loader.load_and_split(text_splitter)
+
+        if len(documents) == 0:
+            return DocumentType.Empty, file_path
 
         # midterm = midterm, final = final,
         # test = anything else (e.g. Test_1 back when we did multiple tests per sem)
         for key in ["midterm", "final", "test"]:
-            if key in file_path.lower():
+            if ext == ".pdf" and key in file_path.lower():
                 doc_type = DocumentType.Test
                 for doc in documents:
                     doc.metadata["type"] = key
-                    break
+                break
         else:
             doc_type = DocumentType.Doc
             for doc in documents:
                 doc.metadata["type"] = "doc"
 
+        # print(doc_type, file_path)
         return doc_type, documents
 
     raise ValueError(f"Unsupported file extension '{ext}'")
@@ -164,9 +187,11 @@ def load_single_document(
 
 def load_documents(
     source_dir: str, ignored_files: List[str] = []
-) -> SegregatedDocuments:
+) -> Tuple[SegregatedDocuments, List[str]]:
     """
-    Loads all documents from the source documents directory, ignoring specified files
+    Returns a list of all documents loaded from the source documents directory
+    (ignoring specified files) along with a list of documents that had no
+    readable content and should be blacklisted for the future.
     """
     all_files = []
     for ext in LOADER_MAPPING:
@@ -182,56 +207,104 @@ def load_documents(
     if len(filtered_files) == 0:
         print("No new documents to load")
         exit(0)
-
-    print(f"Loading {len(filtered_files)} new documents from {SOURCE_DIRECTORY}")
+    # print(ignored_files)
     # print(filtered_files)
 
-    text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP
-    )
-    load = partial(load_single_document, text_splitter)
+    print(f"Loading {len(filtered_files)} new documents from {SOURCE_DIRECTORY}")
+    print(filtered_files)
 
     with Pool(processes=os.cpu_count()) as pool:
-        docs = []
-        tests = []
+        docs: List[Document] = []
+        tests: List[Document] = []
+        to_blacklist: List[str] = []
         with tqdm(
             total=len(filtered_files), desc="Loading new documents", ncols=80
         ) as pbar:
-            for doc_type, docs in pool.imap_unordered(load, filtered_files):
+            for doc_type, new_docs in pool.imap_unordered(
+                load_single_document, filtered_files
+            ):
                 if doc_type == DocumentType.Test:
-                    tests.extend(docs)
+                    tests.extend(new_docs)  # type: ignore
                 elif doc_type == DocumentType.Doc:
-                    docs.extend(docs)
+                    docs.extend(new_docs)  # type: ignore
+                elif doc_type == DocumentType.Empty:
+                    to_blacklist.append(new_docs)  # type: ignore
                 else:
                     raise ValueError(f"Unsupported document type {doc_type}")
                 pbar.update()
 
-    total_chunks = len(docs) + len(tests)
     print(
-        f"Loaded and split into {total_chunks} chunks of text (max. {CHUNK_SIZE} tokens each)"
+        f"Loaded and split into {len(docs)} chunks of text for docs"
+        f" and {len(tests)} of text for tests (max. {CHUNK_SIZE} tokens each)"
     )
 
-    return SegregatedDocuments(docs, tests)
+    # print(docs)
 
-
-def process_documents(ignored_files: List[str] = []) -> SegregatedDocuments:
-    """
-    Load documents and split in chunks
-    """
-    print(f"Loading documents from {SOURCE_DIRECTORY}")
-    return load_documents(SOURCE_DIRECTORY, ignored_files)
+    return SegregatedDocuments(docs=docs, tests=tests), to_blacklist
 
 
 def does_vectorstore_exist(
     persist_directory: str, embeddings: HuggingFaceEmbeddings
 ) -> bool:
-    """
-    Checks if vectorstore exists
-    """
-    db = Chroma(persist_directory=persist_directory, embedding_function=embeddings)
+    """Checks if vectorstore exists"""
+    db = Chroma(
+        collection_name="docs",
+        persist_directory=persist_directory,
+        embedding_function=embeddings,
+    )
     if not db.get()["documents"]:
         return False
     return True
+
+
+def get_stored_file_sources(collections: List[Chroma]) -> List[str]:
+    sources = []
+    for collection in collections:
+        data = collection.get()
+        sources.extend([metadata["source"] for metadata in data["metadatas"]])
+    return sources
+
+
+def get_file_sources(docs: List[Document]) -> Set[str]:
+    return {doc.metadata["source"] + "\n" for doc in docs}
+
+
+def write_sources(docs: SegregatedDocuments) -> None:
+    with open("docs.txt", "w") as f:
+        f.writelines(get_file_sources(docs.docs))
+    with open("tests.txt", "w") as f:
+        f.writelines(get_file_sources(docs.tests))
+
+
+def add_documents(
+    collection: Chroma, collection_name: str, docs: List[Document]
+) -> None:
+    if len(docs) == 0:
+        print(f"No new documents for collection {collection_name}")
+        return
+
+    print(
+        f"Creating embeddings for {len(docs)} new chunks in '{collection_name}'."
+        " May take some minutes..."
+    )
+    collection.add_documents(docs)
+
+
+def read_blacklist() -> List[str]:
+    """Read the blacklist from the disk or returns an empty list."""
+    try:
+        with open("./blacklist.txt", "r") as f:
+            return [line.strip() for line in f.readlines()]
+    except FileNotFoundError:
+        return []
+
+
+def add_to_blacklist(paths_to_add: List[str]):
+    """Add the specified file paths to the saved blacklist."""
+    # a+ to make the file if it doesn't exist
+    with open("./blacklist.txt", "a+") as f:
+        for file_path in paths_to_add:
+            f.write(file_path + "\n")
 
 
 def main():
@@ -239,69 +312,44 @@ def main():
     embeddings = HuggingFaceEmbeddings(model_name=EMBEDDINGS_MODEL_NAME)
 
     # Chroma client
-    chroma_settings = chromadb.config.Settings(
-        persist_directory=PERSIST_DIRECTORY, anonymized_telemetry=False
-    )
     chroma_client = chromadb.PersistentClient(
-        settings=chroma_settings, path=PERSIST_DIRECTORY
+        settings=CHROMA_SETTINGS, path=PERSIST_DIRECTORY
     )
 
+    docs_db = Chroma(
+        collection_name="docs",
+        persist_directory=PERSIST_DIRECTORY,
+        embedding_function=embeddings,
+        client_settings=CHROMA_SETTINGS,
+        client=chroma_client,
+        collection_metadata={"hnsw:space": SIMILARITY_METRIC},
+    )
+    tests_db = Chroma(
+        collection_name="tests",
+        persist_directory=PERSIST_DIRECTORY,
+        embedding_function=embeddings,
+        client_settings=CHROMA_SETTINGS,
+        client=chroma_client,
+        collection_metadata={"hnsw:space": SIMILARITY_METRIC},
+    )
     if does_vectorstore_exist(PERSIST_DIRECTORY, embeddings):
-        # Update and store locally vectorstore
         print(f"Appending to existing vectorstore at {PERSIST_DIRECTORY}")
-        docs_db = Chroma(
-            collection_name="docs",
-            persist_directory=PERSIST_DIRECTORY,
-            embedding_function=embeddings,
-            client_settings=chroma_settings,
-            client=chroma_client,
-            collection_metadata={"hnsw:space": SIMILARITY_METRIC},
-        )
-        tests_db = Chroma(
-            collection_name="tests",
-            persist_directory=PERSIST_DIRECTORY,
-            embedding_function=embeddings,
-            client_settings=chroma_settings,
-            client=chroma_client,
-            collection_metadata={"hnsw:space": SIMILARITY_METRIC},
-        )
-        collection = docs_db.get()
-        texts = process_documents(
-            [metadata["source"] for metadata in collection["metadatas"]]
-        )
-        print(
-            f"Creating embeddings for {len(texts.docs)} new course documents. May take some minutes..."
-        )
-        docs_db.add_documents(texts.docs)
-        print(
-            f"Creating embeddings for {len(texts.tests)} new tests. May take some minutes..."
-        )
-        tests_db.add_documents(texts.tests)
+
+        ignored = read_blacklist()
+        ignored.extend(get_stored_file_sources([docs_db, tests_db]))
+
+        texts, to_blacklist = load_documents(SOURCE_DIRECTORY, ignored)
     else:
-        # Create and store locally vectorstore
-        print("Creating new vectorstore")
-        texts = process_documents()
-        print("Creating embeddings. May take some minutes...")
-        docs_db = Chroma.from_documents(
-            texts.docs,
-            embeddings,
-            persist_directory=PERSIST_DIRECTORY,
-            client_settings=chroma_settings,
-            client=chroma_client,
-            # Use cos sim instead of l2 (default), since we're doing doc retrieval
-            collection_metadata={"hnsw:space": SIMILARITY_METRIC},
-            collection_name="docs",
-        )
-        tests_db = Chroma.from_documents(
-            texts.tests,
-            embeddings,
-            persist_directory=PERSIST_DIRECTORY,
-            client_settings=chroma_settings,
-            client=chroma_client,
-            # Use cos sim instead of l2 (default), since we're doing doc retrieval
-            collection_metadata={"hnsw:space": SIMILARITY_METRIC},
-            collection_name="docs",
-        )
+        print(f"Creating new vectorstore at {PERSIST_DIRECTORY}")
+        texts, to_blacklist = load_documents(SOURCE_DIRECTORY)
+
+    add_to_blacklist(to_blacklist)
+
+    write_sources(texts)
+
+    add_documents(docs_db, "docs", texts.docs)
+    add_documents(tests_db, "tests", texts.tests)
+
     docs_db.persist()
     docs_db = None
     tests_db.persist()
