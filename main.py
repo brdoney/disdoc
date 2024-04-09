@@ -1,4 +1,3 @@
-import enum
 import json
 from timeit import default_timer as timer
 from typing import cast
@@ -9,11 +8,13 @@ import chromadb.config
 import discord
 from discord import app_commands
 from dotenv import load_dotenv
-from env_var import load_env
 from langchain.embeddings import HuggingFaceEmbeddings
 from langchain.vectorstores import Chroma
-from pdf_images import load_image_cache, pdf_image, save_image_cache
 from typing_extensions import override
+
+from categories import AskCategory
+from env_var import load_env
+from pdf_images import load_image_cache, pdf_image, save_image_cache
 
 _ = load_dotenv()
 
@@ -101,37 +102,6 @@ SOURCE_CODE_EXT = {
     ".s": "x86asm",
 }
 
-# class FileEnumMeta(type(enum.Enum)):
-#     def __new__(metacls, cls: str, bases: tuple[type, ...], classdict: enum._EnumDict):
-#         filename = classdict.get('_filename', None)  # type: ignore[reportAny]
-#         if filename is not None and isinstance(filename, str):
-#             with open(filename, 'r') as file:
-#                 lines = file.readlines()
-#                 for line in lines:
-#                     if line in classdict:
-#                         continue
-#                     member_name = line.strip()
-#                     enum_member = metacls(member_name, bases, classdict)
-#                     classdict[member_name] = enum_member
-#         return super().__new__(metacls, cls, bases, classdict)
-#
-# class FileEnum(enum.Enum, metaclass=FileEnumMeta):
-#     _filename = None
-#
-#     def __init__(self, *args: Any):  # type: ignore[reportAny]
-#         super().__init__()
-#         if args:
-#             self._value_ = args[0]
-#
-#     @override
-#     def __str__(self):
-#         return self.name
-#
-# class AskCategoryFile(FileEnum):  # type: ignore[generalTypeIssues]
-#     _filename = "categories.txt"
-#
-# print(AskCategoryFile)
-
 
 def add_query_param(url: ParseResult, name: str, value: str) -> ParseResult:
     """Create a new URL from `url`, with the name and value pair added to the
@@ -154,29 +124,25 @@ def add_query_param(url: ParseResult, name: str, value: str) -> ParseResult:
     return url._replace(query=urlencode(query))
 
 
-with open("./categories.txt", "r") as f:
-    AskCategory = enum.Enum("AskCategory", [line.strip() for line in f.readlines()])
-
-
 @client.tree.command(description="Ask for documents related to your question")
 @app_commands.describe(
     question="Question or statement you want to find documents regarding"
 )
 async def ask(
     interaction: discord.Interaction,
-    category: AskCategory,  # type: ignore[reportInvalidTypeForm]
+    category: AskCategory,
     question: str,
 ):
     await interaction.response.defer()
 
     start = timer()
-    if category == AskCategory.tests:  # type: ignore[reportUnknownMemberType]
+    if category == AskCategory.tests:
         docs = await tests_db.asimilarity_search_with_relevance_scores(question)
-    elif category == AskCategory.midterm:  # type: ignore[reportUnknownMemberType]
+    elif category == AskCategory.midterm:
         docs = await tests_db.asimilarity_search_with_relevance_scores(
             question, filter={"type": "midterm"}
         )
-    elif category == AskCategory.final:  # type: ignore[reportUnknownMemberType]
+    elif category == AskCategory.final:
         docs = await tests_db.asimilarity_search_with_relevance_scores(
             question, filter={"type": "final"}
         )
