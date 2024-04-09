@@ -1,9 +1,8 @@
 import os
-from typing import List, Optional
 
 
 def load_env(
-    env_var: str, default: Optional[str] = None, choices: Optional[List[str]] = None
+    env_var: str, default: str | None = None, choices: list[str] | None = None
 ) -> str:
     if default is not None:
         res = os.getenv(env_var, default)

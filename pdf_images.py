@@ -1,5 +1,6 @@
-from typing import List, Optional, Tuple, cast
-import fitz
+# type: ignore[reportUnknownMemberType]
+from typing import cast
+import fitz  # type: ignore[reportMissingTypeStubs]
 import langchain.schema
 import uuid
 import os
@@ -28,13 +29,13 @@ def load_image_cache() -> None:
         pass
 
 
-def get_cropped_image(search_results: List[fitz.Rect], page: fitz.Page) -> str:
+def get_cropped_image(search_results: list[fitz.Rect], page: fitz.Page) -> str:
     overall: fitz.Rect = search_results[0]
     for rect in search_results[1:]:
         overall |= rect
 
     # Set cropbox so no content shows in padded area
-    page.set_cropbox(overall)
+    page.set_cropbox(overall)  # type: ignore[reportUnknownMemberType]
 
     # Add padding so that we'll have some space after clipping
     padding = 10
@@ -43,7 +44,7 @@ def get_cropped_image(search_results: List[fitz.Rect], page: fitz.Page) -> str:
     padding_box.y0 -= padding
     padding_box.x1 += padding
     padding_box.y1 += padding
-    pixels = page.get_pixmap(clip=padding_box)  # type: ignore
+    pixels: fitz.Pixmap = page.get_pixmap(clip=padding_box)
 
     if not os.path.isdir(__CACHE_FOLDER):
         os.mkdir(__CACHE_FOLDER)
@@ -56,7 +57,7 @@ def get_cropped_image(search_results: List[fitz.Rect], page: fitz.Page) -> str:
 
 def __search_pdf(
     search: str, pdf: fitz.Document, document: langchain.schema.Document
-) -> Optional[Tuple[fitz.Page, List[fitz.Quad]]]:
+) -> tuple[fitz.Page, list[fitz.Quad]] | None:
     page_num = document.metadata["page"]
     page = pdf.load_page(page_num)
 
@@ -79,7 +80,7 @@ def __search_pdf(
     return None
 
 
-def pdf_image(doc_path: str, document: langchain.schema.Document) -> Optional[str]:
+def pdf_image(doc_path: str, document: langchain.schema.Document) -> str | None:
     key = document.metadata["source"] + document.page_content
     if key in __cached_images:
         return __cached_images[key]

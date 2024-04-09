@@ -1,46 +1,46 @@
 #!/usr/bin/env python3
-from datetime import datetime
-from enum import Enum
 import glob
 import importlib.util
-from multiprocessing import Pool
 import os
+from datetime import datetime
+from enum import Enum
+from multiprocessing import Pool
 from pathlib import Path
-from typing import List, Literal, NamedTuple, Set, Tuple, Union
+from typing import Any, Literal, NamedTuple  # type: ignore[reportAny]
 
 import chromadb
 import chromadb.api
 import chromadb.config
+import fitz  # type: ignore[reportMissingTypeStubs]
 from dotenv import load_dotenv
-import fitz
+from env_var import load_env
 from langchain.docstore.document import Document
 from langchain.document_loaders import (
     Blob,
     CSVLoader,
     EverNoteLoader,
     TextLoader,
-    UnstructuredEPubLoader,
     UnstructuredEmailLoader,
+    UnstructuredEPubLoader,
     UnstructuredHTMLLoader,
     UnstructuredMarkdownLoader,
     UnstructuredODTLoader,
     UnstructuredPowerPointLoader,
     UnstructuredWordDocumentLoader,
 )
+from langchain.document_loaders.base import BaseLoader
 from langchain.document_loaders.parsers.pdf import PyMuPDFParser
 from langchain.document_loaders.pdf import BasePDFLoader
 from langchain.embeddings import HuggingFaceEmbeddings
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.vectorstores import Chroma
 from tqdm import tqdm
-
-from env_var import load_env
+from typing_extensions import override
 
 # Will share dotenv with outer directory
 if not load_dotenv():
     print(
-        "Could not load .env file or it is empty."
-        "Please check if it exists and is readable."
+        "Could not load .env file or it is empty. Please check if it exists and is readable."
     )
     exit(1)
 
@@ -63,7 +63,8 @@ CHROMA_SETTINGS = chromadb.config.Settings(
 class MyElmLoader(UnstructuredEmailLoader):
     """Wrapper to fallback to text/plain when default does not work"""
 
-    def load(self) -> List[Document]:
+    @override
+    def load(self) -> list[Document]:
         """Wrapper adding fallback for elm without html"""
         try:
             try:
@@ -85,18 +86,19 @@ class MyElmLoader(UnstructuredEmailLoader):
 class MyPyMuPDFLoader(BasePDFLoader):
     """Load `PDF` files using `PyMuPDF`."""
 
-    def __init__(self, file_path: str, **kwargs) -> None:
+    def __init__(self, file_path: str, **kwargs: Any) -> None:  # type: ignore[reportAny]
         """Initialize with a file path."""
         if importlib.util.find_spec("fitz") is None:
             raise ImportError(
                 "`PyMuPDF` package not found, please install it with "
-                "`pip install pymupdf`"
+                + "`pip install pymupdf`"
             )
 
         super().__init__(file_path)
         self.text_kwargs = kwargs
 
-    def load(self) -> List[Document]:
+    @override
+    def load(self) -> list[Document]:
         """Load file."""
 
         parser = PyMuPDFParser(text_kwargs=self.text_kwargs)
@@ -105,7 +107,7 @@ class MyPyMuPDFLoader(BasePDFLoader):
 
 
 # Map file extensions to document loaders and their arguments
-LOADER_MAPPING = {
+LOADER_MAPPING: dict[str, tuple[type[BaseLoader], dict[str, Any]]] = {
     ".csv": (CSVLoader, {}),
     # ".docx": (Docx2txtLoader, {}),
     ".doc": (UnstructuredWordDocumentLoader, {}),
@@ -143,16 +145,16 @@ class DocumentType(Enum):
 
 
 class SegregatedDocuments(NamedTuple):
-    docs: List[Document]
-    tests: List[Document]
+    docs: list[Document]
+    tests: list[Document]
 
 
 def load_single_document(
     file_path: str,
-) -> Union[
-    Tuple[Literal[DocumentType.Empty], str],
-    Tuple[Literal[DocumentType.Doc, DocumentType.Test], List[Document]],
-]:
+) -> (
+    tuple[Literal[DocumentType.Empty], str]
+    | tuple[Literal[DocumentType.Doc, DocumentType.Test], list[Document]]
+):
     """Load a single document and split it into chunks from the given file path.
 
     If the file splits into zero chunks (the file doesn't contain text), simply
@@ -168,7 +170,7 @@ def load_single_document(
     if ext in LOADER_MAPPING:
         loader_class, loader_args = LOADER_MAPPING[ext]
         loader = loader_class(file_path, **loader_args)
-        documents: List[Document] = loader.load_and_split(text_splitter)
+        documents: list[Document] = loader.load_and_split(text_splitter)
 
         if len(documents) == 0:
             return DocumentType.Empty, file_path
@@ -179,12 +181,12 @@ def load_single_document(
             if ext == ".pdf" and key in file_path.lower():
                 doc_type = DocumentType.Test
                 for doc in documents:
-                    doc.metadata["type"] = key
+                    doc.metadata["type"] = key  # type: ignore[reportUnknownMemberType]
                 break
         else:
             doc_type = DocumentType.Doc
             for doc in documents:
-                doc.metadata["type"] = "doc"
+                doc.metadata["type"] = "doc"  # type: ignore[reportUnknownMemberType]
 
         # print(doc_type, file_path)
         return doc_type, documents
@@ -193,14 +195,17 @@ def load_single_document(
 
 
 def load_documents(
-    source_dir: str, ignored_files: List[str] = []
-) -> Tuple[SegregatedDocuments, List[str]]:
+    source_dir: str, ignored_files: list[str] | None = None
+) -> tuple[SegregatedDocuments, list[str]]:
     """
     Returns a list of all documents loaded from the source documents directory
     (ignoring specified files) along with a list of documents that had no
     readable content and should be blacklisted for the future.
     """
-    all_files = []
+    if ignored_files is None:
+        ignored_files = []
+
+    all_files: list[str] = []
     for ext in LOADER_MAPPING:
         all_files.extend(
             glob.glob(os.path.join(source_dir, f"**/*{ext.lower()}"), recursive=True)
@@ -220,28 +225,30 @@ def load_documents(
     print(f"Loading {len(filtered_files)} new documents from {SOURCE_DIRECTORY}")
 
     with Pool(processes=os.cpu_count()) as pool:
-        docs: List[Document] = []
-        tests: List[Document] = []
-        to_blacklist: List[str] = []
+        docs: list[Document] = []
+        tests: list[Document] = []
+        to_blacklist: list[str] = []
         with tqdm(
             total=len(filtered_files), desc="Loading new documents", ncols=80
         ) as pbar:
-            for doc_type, new_docs in pool.imap_unordered(
-                load_single_document, filtered_files
-            ):
-                if doc_type == DocumentType.Test:
-                    tests.extend(new_docs)  # type: ignore
-                elif doc_type == DocumentType.Doc:
-                    docs.extend(new_docs)  # type: ignore
-                elif doc_type == DocumentType.Empty:
-                    to_blacklist.append(new_docs)  # type: ignore
+            for ret in pool.imap_unordered(load_single_document, filtered_files):
+                # Done this way so mypy doesn't complain
+                if ret[0] is DocumentType.Test:
+                    docs = ret[1]
+                    tests.extend(docs)
+                elif ret[0] is DocumentType.Doc:
+                    docs = ret[1]
+                    docs.extend(docs)
+                elif ret[0] is DocumentType.Empty:
+                    file_path = ret[1]
+                    to_blacklist.append(file_path)
                 else:
-                    raise ValueError(f"Unsupported document type {doc_type}")
-                pbar.update()
+                    raise ValueError(f"Unsupported document type {ret[0]}")
+                _ = pbar.update()
 
     print(
         f"Loaded and split into {len(docs)} chunks of text for docs"
-        f" and {len(tests)} chunks of text for tests (max. {CHUNK_SIZE} tokens each)"
+        + f" and {len(tests)} chunks of text for tests (max. {CHUNK_SIZE} tokens each)"
     )
 
     # print(docs)
@@ -263,18 +270,18 @@ def does_vectorstore_exist(
     return True
 
 
-def get_stored_file_sources(collections: List[Chroma]) -> List[str]:
+def get_stored_file_sources(collections: list[Chroma]) -> list[str]:
     """Get a list of the paths to all the files stored in the given collections."""
-    sources = []
+    sources: list[str] = []
     for collection in collections:
         data = collection.get()
-        sources.extend([metadata["source"] for metadata in data["metadatas"]])
+        sources.extend([metadata["source"] for metadata in data["metadatas"]])  # type: ignore[reportAny]
     return sources
 
 
-def get_file_sources(docs: List[Document]) -> Set[str]:
+def get_file_sources(docs: list[Document]) -> set[str]:
     """Get a set of all of the file sources for the given list."""
-    return {doc.metadata["source"] + "\n" for doc in docs}
+    return {doc.metadata["source"] + "\n" for doc in docs}  # type: ignore[reportUnknownMemberType]
 
 
 def write_sources(docs: SegregatedDocuments) -> None:
@@ -307,7 +314,7 @@ def write_sources(docs: SegregatedDocuments) -> None:
 
 
 def add_documents(
-    collection: Chroma, collection_name: str, docs: List[Document]
+    collection: Chroma, collection_name: str, docs: list[Document]
 ) -> None:
     """Add documents to the given collection or do nothing if no documents are given."""
     if len(docs) == 0:
@@ -316,12 +323,12 @@ def add_documents(
 
     print(
         f"Creating embeddings for {len(docs)} new chunks in '{collection_name}'."
-        " May take some minutes..."
+        + " May take some minutes..."
     )
-    collection.add_documents(docs)
+    _ = collection.add_documents(docs)
 
 
-def read_blacklist() -> List[str]:
+def read_blacklist() -> list[str]:
     """Read the blacklist from the disk or returns an empty list."""
     try:
         with open("./blacklist.txt", "r") as f:
@@ -330,12 +337,12 @@ def read_blacklist() -> List[str]:
         return []
 
 
-def add_to_blacklist(paths_to_add: List[str]):
+def add_to_blacklist(paths_to_add: list[str]):
     """Add the specified file paths to the saved blacklist."""
     # a+ to make the file if it doesn't exist
     with open("./blacklist.txt", "a+") as f:
         for file_path in paths_to_add:
-            f.write(file_path + "\n")
+            _ = f.write(file_path + "\n")
 
 
 def main():

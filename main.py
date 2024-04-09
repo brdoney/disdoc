@@ -1,6 +1,7 @@
 import enum
 import json
 from timeit import default_timer as timer
+from typing import cast
 from urllib.parse import ParseResult, parse_qsl, urlencode, urlparse
 
 import chromadb
@@ -8,13 +9,13 @@ import chromadb.config
 import discord
 from discord import app_commands
 from dotenv import load_dotenv
+from env_var import load_env
 from langchain.embeddings import HuggingFaceEmbeddings
 from langchain.vectorstores import Chroma
-
-from env_var import load_env
 from pdf_images import load_image_cache, pdf_image, save_image_cache
+from typing_extensions import override
 
-load_dotenv()
+_ = load_dotenv()
 
 DISCORD_TOKEN = load_env("DISCORD_TOKEN")
 PERSIST_DIRECTORY = load_env("PERSIST_DIRECTORY")
@@ -23,7 +24,7 @@ MAPPINGS_PATH = load_env("MAPPINGS_PATH")
 SIMILARITY_METRIC = load_env("SIMILARITY_METRIC", choices=["cosine", "l2", "ip"])
 
 with open(MAPPINGS_PATH) as f:
-    NAME_TO_URL = json.load(f)
+    NAME_TO_URL: dict[str, str] = json.load(f)
 
 embeddings = HuggingFaceEmbeddings(model_name=EMBEDDINGS_MODEL_NAME)
 CHROMA_SETTINGS = chromadb.config.Settings(
@@ -59,6 +60,7 @@ class MyClient(discord.Client):
         super().__init__(intents=intents)
         self.tree = app_commands.CommandTree(self)
 
+    @override
     async def setup_hook(self):
         synced = await self.tree.sync()
         print(f"Synced {len(synced)} command(s)")
@@ -70,7 +72,10 @@ client = MyClient(intents=intents)
 @client.event
 async def on_ready():
     print("Running Chroma Bot!")
-    print(f"Logged in as {client.user} (ID: {client.user.id})")  # type: ignore
+    if client.user is None:
+        print("Not logged in. An error must have occurred")
+    else:
+        print(f"Logged in as {client.user} (ID: {client.user.id})")
     print("------")
 
 
@@ -95,6 +100,37 @@ SOURCE_CODE_EXT = {
     ".S": "x86asm",
     ".s": "x86asm",
 }
+
+# class FileEnumMeta(type(enum.Enum)):
+#     def __new__(metacls, cls: str, bases: tuple[type, ...], classdict: enum._EnumDict):
+#         filename = classdict.get('_filename', None)  # type: ignore[reportAny]
+#         if filename is not None and isinstance(filename, str):
+#             with open(filename, 'r') as file:
+#                 lines = file.readlines()
+#                 for line in lines:
+#                     if line in classdict:
+#                         continue
+#                     member_name = line.strip()
+#                     enum_member = metacls(member_name, bases, classdict)
+#                     classdict[member_name] = enum_member
+#         return super().__new__(metacls, cls, bases, classdict)
+#
+# class FileEnum(enum.Enum, metaclass=FileEnumMeta):
+#     _filename = None
+#
+#     def __init__(self, *args: Any):  # type: ignore[reportAny]
+#         super().__init__()
+#         if args:
+#             self._value_ = args[0]
+#
+#     @override
+#     def __str__(self):
+#         return self.name
+#
+# class AskCategoryFile(FileEnum):  # type: ignore[generalTypeIssues]
+#     _filename = "categories.txt"
+#
+# print(AskCategoryFile)
 
 
 def add_query_param(url: ParseResult, name: str, value: str) -> ParseResult:
@@ -127,18 +163,20 @@ with open("./categories.txt", "r") as f:
     question="Question or statement you want to find documents regarding"
 )
 async def ask(
-    interaction: discord.Interaction, category: AskCategory, question: str  # type: ignore
+    interaction: discord.Interaction,
+    category: AskCategory,  # type: ignore[reportInvalidTypeForm]
+    question: str,
 ):
     await interaction.response.defer()
 
     start = timer()
-    if category == AskCategory.tests:
+    if category == AskCategory.tests:  # type: ignore[reportUnknownMemberType]
         docs = await tests_db.asimilarity_search_with_relevance_scores(question)
-    elif category == AskCategory.midterm:
+    elif category == AskCategory.midterm:  # type: ignore[reportUnknownMemberType]
         docs = await tests_db.asimilarity_search_with_relevance_scores(
             question, filter={"type": "midterm"}
         )
-    elif category == AskCategory.final:
+    elif category == AskCategory.final:  # type: ignore[reportUnknownMemberType]
         docs = await tests_db.asimilarity_search_with_relevance_scores(
             question, filter={"type": "final"}
         )
@@ -148,10 +186,10 @@ async def ask(
     end = timer()
     print(f"{end - start}s")
 
-    embeds = []
-    files = []
+    embeds: list[discord.Embed] = []
+    files: list[discord.File] = []
     for i, (doc, score) in enumerate(docs):
-        source = doc.metadata["source"].strip()
+        source = cast(str, doc.metadata["source"]).strip()  # type: ignore[reportUnknownMemberType]
 
         url_str = NAME_TO_URL[source.removeprefix("source_documents/")]
         url = add_query_param(urlparse(url_str), "rec_id", str(i))
@@ -171,7 +209,7 @@ async def ask(
 
         if ext == ".pdf":
             # Page numbers start at 0 internally, but 1 in links
-            page = int(doc.metadata["page"]) + 1
+            page = int(doc.metadata["page"]) + 1  # type: ignore[reportUnknownMemberType]
             url = url._replace(fragment=f"page={page}")
             title += f" - page {page}"
 
@@ -179,8 +217,9 @@ async def ask(
             if image_url is not None:
                 file = discord.File(image_url)
                 files.append(file)
-                embed = discord.Embed(title=title, url=url.geturl())
-                embed.set_image(url=f"attachment://{file.filename}")
+                embed = discord.Embed(title=title, url=url.geturl()).set_image(
+                    url=f"attachment://{file.filename}"
+                )
             else:
                 embed = discord.Embed(title=title, url=url.geturl(), description=desc)
         else:
