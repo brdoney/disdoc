@@ -69,6 +69,11 @@ class MyPyMuPDFLoader(BasePDFLoader):
         return parser.parse(blob)
 
 
+def get_ingest_dir():
+    """Get the path to the ingest directory (which this file is contained in)."""
+    return Path(__file__).parent
+
+
 # Map file extensions to document loaders and their arguments
 LOADER_MAPPING: dict[str, tuple[type[BaseLoader], dict[str, Any]]] = {
     ".csv": (CSVLoader, {}),
@@ -84,13 +89,11 @@ LOADER_MAPPING: dict[str, tuple[type[BaseLoader], dict[str, Any]]] = {
     ".pdf": (MyPyMuPDFLoader, {"flags": fitz.TEXT_DEHYPHENATE}),
     ".ppt": (UnstructuredPowerPointLoader, {}),
     ".pptx": (UnstructuredPowerPointLoader, {}),
-    ".txt": (TextLoader, {"encoding": "utf8"}),
     # Add more mappings for other file extensions and loaders as needed
 }
 
 # Extend with our extra filetypes (i.e. code) that will fall back to text loader
-file_dir = Path(__file__).parent
-with (file_dir / "text_loader.txt").open("r") as f:
+with (get_ingest_dir() / "text_extensions.txt").open("r") as f:
     for line in f.readlines():
         LOADER_MAPPING[line.strip()] = (TextLoader, {"encoding": "utf8"})
 
