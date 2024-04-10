@@ -1,12 +1,14 @@
 import json
+import sqlite3
 from timeit import default_timer as timer
-from typing import cast
-from urllib.parse import ParseResult, parse_qsl, urlencode, urlparse
+from typing import Any, cast
+from urllib.parse import ParseResult, parse_qsl, urlencode, urlparse, urlunparse
 
 import chromadb
 import chromadb.config
 import discord
 from categories import AskCategory
+from consent import check_consent
 from discord import app_commands
 from dotenv import load_dotenv
 from env_var import load_env
@@ -22,6 +24,8 @@ PERSIST_DIRECTORY = load_env("PERSIST_DIRECTORY")
 EMBEDDINGS_MODEL_NAME = load_env("EMBEDDINGS_MODEL_NAME")
 MAPPINGS_PATH = load_env("MAPPINGS_PATH")
 SIMILARITY_METRIC = load_env("SIMILARITY_METRIC", choices=["cosine", "l2", "ip"])
+SQLITE_DB = load_env("SQLITE_DB")
+CONSENT_URL = load_env("CONSENT_URL")
 
 with open(MAPPINGS_PATH) as f:
     NAME_TO_URL: dict[str, str] = json.load(f)
@@ -50,6 +54,8 @@ tests_db = Chroma(
     client_settings=CHROMA_SETTINGS,
     collection_metadata={"hnsw:space": SIMILARITY_METRIC},
 )
+
+sqlite_cursor = sqlite3.connect(SQLITE_DB).cursor()
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -105,9 +111,8 @@ SOURCE_CODE_EXT = {
 }
 
 
-def add_query_param(url: ParseResult, name: str, value: str) -> ParseResult:
-    """Create a new URL from `url`, with the name and value pair added to the
-    query params.
+def add_query_params(url: ParseResult, pairs: list[tuple[str, Any]]) -> ParseResult:
+    """Create a new URL from `url`, with the given query params pairs added.
 
     If a query param with the given name already exists, this
     function adds to it (so there will be multiple entries for it, the
@@ -115,14 +120,13 @@ def add_query_param(url: ParseResult, name: str, value: str) -> ParseResult:
 
     Args:
         url: the url to copy
-        name: the name of the query parameter
-        value: the value to add
+        pairs: the query param and value pairs to add
 
     Returns:
         a copy of the given url with the new name, value pair added to the query params
     """
     query = parse_qsl(url.query)
-    query.append((name, value))
+    query.extend(pairs)
     return url._replace(query=urlencode(query))
 
 
@@ -135,6 +139,14 @@ async def ask(
     category: AskCategory,
     question: str,
 ):
+    if check_consent(sqlite_cursor, interaction.user.id) is None:
+        await interaction.response.send_message(
+            "You have not indicated your consent status. "
+            + "Please do so with the `/consent` command before using any other commands."
+        )
+        return
+
+    # Defer b/c loading vector DB from scratch takes longer than discord's response timeout
     await interaction.response.defer()
 
     start = timer()
@@ -160,7 +172,8 @@ async def ask(
         source = cast(str, doc.metadata["source"]).strip()  # type: ignore[reportUnknownMemberType]
 
         url_str = NAME_TO_URL[source.removeprefix("source_documents/")]
-        url = add_query_param(urlparse(url_str), "rec_id", str(i))
+        # Add rec_id to prevent duplicate links (separate snippets in the same file) from grouping together
+        url = add_query_params(urlparse(url_str), [("rec_id", i)])
 
         doc_name = url.path.split("/")[-1]
         # Note: score is only accurate if we're using cosine as our similarity metric
@@ -198,10 +211,32 @@ async def ask(
 
         embeds.append(embed)
 
+    # We use followup since we deferred earlier
     await interaction.followup.send(
         f"> {question}",
         files=files,
         embeds=embeds,
+    )
+
+
+@client.tree.command(
+    description="Generates a link you can use to indicate your consent status"
+)
+async def consent(interaction: discord.Interaction) -> None:
+    new_url = urlparse(CONSENT_URL)
+
+    # https://courses.cs.vt.edu/cs3214/test/consent.html?discordId=hello
+    params: list[tuple[str, Any]] = [("discordId", interaction.user.id)]
+    new_url = add_query_params(new_url, params)
+    url = urlunparse(new_url)
+
+    await interaction.response.send_message(
+        embed=discord.Embed(
+            title="Consent form",
+            description="Use this form to check and/or indicate your consent status",
+            url=url,
+        ),
+        ephemeral=True,
     )
 
 
