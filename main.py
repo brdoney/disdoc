@@ -6,15 +6,14 @@ from urllib.parse import ParseResult, parse_qsl, urlencode, urlparse
 import chromadb
 import chromadb.config
 import discord
+from categories import AskCategory
 from discord import app_commands
 from dotenv import load_dotenv
+from env_var import load_env
 from langchain.embeddings import HuggingFaceEmbeddings
 from langchain.vectorstores import Chroma
-from typing_extensions import override
-
-from categories import AskCategory
-from env_var import load_env
 from pdf_images import load_image_cache, pdf_image, save_image_cache
+from typing_extensions import override
 
 _ = load_dotenv()
 
@@ -81,25 +80,28 @@ async def on_ready():
 
 
 SOURCE_CODE_EXT = {
-    ".csv": "text",
-    # "html",
-    ".md": "md",
-    # "txt",
-    # "text",
+    # .html not used b/c it's useless
+    # .pdf not used b/c we generate images
+    ".output": "text",
     ".java": "java",
-    ".cpp": "cpp",
-    ".h": "cpp",
-    ".py": "python",
-    ".c": "c",
-    ".y": "c",
-    ".cc": "cpp",
-    ".l": "c",
     ".sh": "bash",
-    "Makefile": "makefile",
-    ".tst": "text",
+    ".txt": "text",
+    ".c": "c",
+    ".h": "cpp",
+    ".cc": "cpp",
+    ".supp": "text",
+    ".cpp": "cpp",
+    ".md": "md",
+    ".py": "python",
     ".js": "js",
-    ".S": "x86asm",
     ".s": "x86asm",
+    ".suppression": "text",
+    ".l": "c",
+    ".tst": "text",
+    ".y": "c",
+    ".rep": "text",
+    ".3": "text",
+    "makefile": "makefile",
 }
 
 
@@ -168,10 +170,10 @@ async def ask(
         desc = doc.page_content
 
         # To make things consistent b/t ingest.py loaders and source_code_ext keys
-        if "." in doc_name:
-            ext = "." + doc_name.split(".")[-1]
-        else:
-            ext = doc_name
+        # Note: if a file is "a.tar.gz", ext would just be ".gz" and if there's no extension,
+        # it would be the name of the doc, like "Makefile"
+        ext = doc_name[doc_name.rindex(".") :] if "." in doc_name else doc_name
+        ext = ext.lower()
 
         if ext == ".pdf":
             # Page numbers start at 0 internally, but 1 in links
