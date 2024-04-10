@@ -1,41 +1,25 @@
 #!/usr/bin/env python3
+from collections.abc import Iterable
 import glob
-import importlib.util
 import os
 from datetime import datetime
 from enum import Enum
 from multiprocessing import Pool
 from pathlib import Path
-from typing import Any, Literal, NamedTuple  # type: ignore[reportAny]
+from typing import Literal, NamedTuple
 
 import chromadb
 import chromadb.api
 import chromadb.config
-import fitz  # type: ignore[reportMissingTypeStubs]
 from dotenv import load_dotenv
 from env_var import load_env
 from langchain.docstore.document import Document
-from langchain.document_loaders import (
-    Blob,
-    CSVLoader,
-    EverNoteLoader,
-    TextLoader,
-    UnstructuredEmailLoader,
-    UnstructuredEPubLoader,
-    UnstructuredHTMLLoader,
-    UnstructuredMarkdownLoader,
-    UnstructuredODTLoader,
-    UnstructuredPowerPointLoader,
-    UnstructuredWordDocumentLoader,
-)
-from langchain.document_loaders.base import BaseLoader
-from langchain.document_loaders.parsers.pdf import PyMuPDFParser
-from langchain.document_loaders.pdf import BasePDFLoader
 from langchain.embeddings import HuggingFaceEmbeddings
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.vectorstores import Chroma
 from tqdm import tqdm
-from typing_extensions import override
+
+from loaders import LOADER_MAPPING
 
 # Will share dotenv with outer directory
 if not load_dotenv():
@@ -57,82 +41,6 @@ CHUNK_OVERLAP = 50
 CHROMA_SETTINGS = chromadb.config.Settings(
     persist_directory=PERSIST_DIRECTORY, anonymized_telemetry=False
 )
-
-
-# Custom document loaders
-class MyElmLoader(UnstructuredEmailLoader):
-    """Wrapper to fallback to text/plain when default does not work"""
-
-    @override
-    def load(self) -> list[Document]:
-        """Wrapper adding fallback for elm without html"""
-        try:
-            try:
-                doc = UnstructuredEmailLoader.load(self)
-            except ValueError as e:
-                if "text/html content not found in email" in str(e):
-                    # Try plain text
-                    self.unstructured_kwargs["content_source"] = "text/plain"
-                    doc = UnstructuredEmailLoader.load(self)
-                else:
-                    raise
-        except Exception as e:
-            # Add file_path to exception message
-            raise type(e)(f"{self.file_path}: {e}") from e
-
-        return doc
-
-
-class MyPyMuPDFLoader(BasePDFLoader):
-    """Load `PDF` files using `PyMuPDF`."""
-
-    def __init__(self, file_path: str, **kwargs: Any) -> None:  # type: ignore[reportAny]
-        """Initialize with a file path."""
-        if importlib.util.find_spec("fitz") is None:
-            raise ImportError(
-                "`PyMuPDF` package not found, please install it with "
-                + "`pip install pymupdf`"
-            )
-
-        super().__init__(file_path)
-        self.text_kwargs = kwargs
-
-    @override
-    def load(self) -> list[Document]:
-        """Load file."""
-
-        parser = PyMuPDFParser(text_kwargs=self.text_kwargs)
-        blob = Blob.from_path(self.file_path)
-        return parser.parse(blob)
-
-
-# Map file extensions to document loaders and their arguments
-LOADER_MAPPING: dict[str, tuple[type[BaseLoader], dict[str, Any]]] = {
-    ".csv": (CSVLoader, {}),
-    # ".docx": (Docx2txtLoader, {}),
-    ".doc": (UnstructuredWordDocumentLoader, {}),
-    ".docx": (UnstructuredWordDocumentLoader, {}),
-    ".enex": (EverNoteLoader, {}),
-    ".eml": (MyElmLoader, {}),
-    ".epub": (UnstructuredEPubLoader, {}),
-    ".html": (UnstructuredHTMLLoader, {}),
-    ".md": (UnstructuredMarkdownLoader, {}),
-    ".odt": (UnstructuredODTLoader, {}),
-    ".pdf": (MyPyMuPDFLoader, {"flags": fitz.TEXT_DEHYPHENATE}),
-    ".ppt": (UnstructuredPowerPointLoader, {}),
-    ".pptx": (UnstructuredPowerPointLoader, {}),
-    ".txt": (TextLoader, {"encoding": "utf8"}),
-    # Add more mappings for other file extensions and loaders as needed
-}
-
-# Extend with our extra filetypes (i.e. code) that will fall back to text loader
-file_dir = Path(__file__).parent
-with (file_dir / "text_loader.txt").open("r") as f:
-    for line in f.readlines():
-        LOADER_MAPPING[line.strip()] = (TextLoader, {"encoding": "utf8"})
-
-print(LOADER_MAPPING.keys())
-
 
 class DocumentType(Enum):
     Doc = 1
@@ -193,6 +101,12 @@ def load_single_document(
 
     raise ValueError(f"Unsupported file extension '{ext}'")
 
+def walk(path: Path) -> Iterable[Path]:
+    for p in path.iterdir():
+        if p.is_dir():
+            yield from walk(p)
+            continue
+        yield p
 
 def load_documents(
     source_dir: str, ignored_files: list[str] | None = None
@@ -206,13 +120,11 @@ def load_documents(
         ignored_files = []
 
     all_files: list[str] = []
-    for ext in LOADER_MAPPING:
-        all_files.extend(
-            glob.glob(os.path.join(source_dir, f"**/*{ext.lower()}"), recursive=True)
-        )
-        all_files.extend(
-            glob.glob(os.path.join(source_dir, f"**/*{ext.upper()}"), recursive=True)
-        )
+    for p in walk(Path(source_dir)):
+        ext = "".join(p.suffixes).lower()
+        if ext in LOADER_MAPPING:
+            all_files.append(ext)
+
     filtered_files = [
         file_path for file_path in all_files if file_path not in ignored_files
     ]
@@ -222,7 +134,7 @@ def load_documents(
     # print(ignored_files)
     # print(filtered_files)
 
-    print(f"Loading {len(filtered_files)} new documents from {SOURCE_DIRECTORY}")
+    print(f"Loading {len(filtered_files)} new documents from {source_dir}")
 
     with Pool(processes=os.cpu_count()) as pool:
         docs: list[Document] = []
