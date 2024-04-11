@@ -111,7 +111,7 @@ SOURCE_CODE_EXT = {
 }
 
 
-def add_query_params(url: ParseResult, pairs: list[tuple[str, Any]]) -> ParseResult:
+def add_query_params(url: ParseResult, pairs: dict[str, Any]) -> ParseResult:
     """Create a new URL from `url`, with the given query params pairs added.
 
     If a query param with the given name already exists, this
@@ -126,7 +126,7 @@ def add_query_params(url: ParseResult, pairs: list[tuple[str, Any]]) -> ParseRes
         a copy of the given url with the new name, value pair added to the query params
     """
     query = parse_qsl(url.query)
-    query.extend(pairs)
+    query.extend(pairs.items())
     return url._replace(query=urlencode(query))
 
 
@@ -173,7 +173,7 @@ async def ask(
 
         url_str = NAME_TO_URL[source.removeprefix("source_documents/")]
         # Add rec_id to prevent duplicate links (separate snippets in the same file) from grouping together
-        url = add_query_params(urlparse(url_str), [("rec_id", i)])
+        url = add_query_params(urlparse(url_str), {"rec_id": i})
 
         doc_name = url.path.split("/")[-1]
         # Note: score is only accurate if we're using cosine as our similarity metric
@@ -228,11 +228,11 @@ async def consent(interaction: discord.Interaction) -> None:
     # https://courses.cs.vt.edu/cs3214/test/consent.html?discordId=hello
     user = interaction.user
 
-    params: list[tuple[str, Any]] = [
-        ("discordId", user.id),
-        ("discordName", user.name),
-        ("discordNick", user.display_name),
-    ]
+    params = {
+        "discordId": user.id,
+        "discordName": user.name,
+        "discordNick": user.display_name,
+    }
     new_url = add_query_params(new_url, params)
     url = urlunparse(new_url)
 
