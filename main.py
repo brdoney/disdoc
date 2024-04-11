@@ -1,7 +1,7 @@
 import json
 import sqlite3
 from timeit import default_timer as timer
-from typing import Any, cast
+from typing import Any, cast  # type: ignore[reportAny]
 from urllib.parse import ParseResult, parse_qsl, urlencode, urlparse, urlunparse
 
 import chromadb
@@ -226,7 +226,13 @@ async def consent(interaction: discord.Interaction) -> None:
     new_url = urlparse(CONSENT_URL)
 
     # https://courses.cs.vt.edu/cs3214/test/consent.html?discordId=hello
-    params: list[tuple[str, Any]] = [("discordId", interaction.user.id)]
+    user = interaction.user
+
+    params: list[tuple[str, Any]] = [
+        ("discordId", user.id),
+        ("discordName", user.name),
+        ("discordNick", user.display_name),
+    ]
     new_url = add_query_params(new_url, params)
     url = urlunparse(new_url)
 
