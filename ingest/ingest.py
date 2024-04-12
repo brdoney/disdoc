@@ -3,16 +3,16 @@ import os
 import pprint
 from collections.abc import Iterable, Iterator
 from datetime import datetime
-from enum import Enum
 from math import ceil
 from multiprocessing import Pool
 from pathlib import Path
-from typing import Literal, NamedTuple
+from typing import Literal
 
 import chromadb
 import chromadb.api
 import chromadb.config
 from dotenv import load_dotenv
+from langchain.embeddings.base import Embeddings
 from env_var import load_env
 from langchain.docstore.document import Document
 from langchain.embeddings import HuggingFaceEmbeddings
@@ -32,9 +32,10 @@ if not load_dotenv():
 
 # Load environment variables
 PERSIST_DIRECTORY = load_env("PERSIST_DIRECTORY")
-SOURCE_DIRECTORY = load_env("SOURCE_DIRECTORY", "source_documents")
+SOURCE_DIRECTORY = Path(load_env("SOURCE_DIRECTORY", "source_documents"))
 EMBEDDINGS_MODEL_NAME = load_env("EMBEDDINGS_MODEL_NAME")
 SIMILARITY_METRIC = load_env("SIMILARITY_METRIC", choices=["cosine", "l2", "ip"])
+COLLECTION_NAME = "docs"
 CHUNK_SIZE = 500
 CHUNK_OVERLAP = 50
 
@@ -44,33 +45,20 @@ CHROMA_SETTINGS = chromadb.config.Settings(
 )
 
 
-class DocumentType(Enum):
-    Doc = 1
-    """A course document (e.g. FAQ page, assignment spec) that generated chunks"""
-    Test = 2
-    """PDF of a past test"""
-    Empty = 3
-    """A document of any type that generated no chunks. Usually happens when a
-    document consists of just images, since no OCR is performed right now."""
-
-
-class SegregatedDocuments(NamedTuple):
-    docs: list[Document]
-    tests: list[Document]
+def get_tag(file_path: Path) -> str:
+    # Will look like ex0/cs3214/..., so we can use parts[0]
+    rel = file_path.relative_to(SOURCE_DIRECTORY)
+    return rel.parts[0]
 
 
 def load_single_document(
     file_path: Path,
-) -> (
-    tuple[Literal[DocumentType.Empty], Path]
-    | tuple[Literal[DocumentType.Doc, DocumentType.Test], list[Document]]
-):
+) -> tuple[Literal[True], list[Document]] | tuple[Literal[False], Path]:
     """Load a single document and split it into chunks from the given file path.
 
     If the file splits into zero chunks (the file doesn't contain text), simply
-    returns this along with the file path.
-    If the file does split into chunks, this returns what type of file it is
-    along with a list of the chunks.
+    returns `False` along with the file path.
+    If the file does split into chunks, returns `True` along with a list of the chunks.
     """
     text_splitter = RecursiveCharacterTextSplitter(
         chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP
@@ -86,23 +74,13 @@ def load_single_document(
 
         if len(documents) == 0:
             print("Empty", file_path)
-            return DocumentType.Empty, file_path
+            return False, file_path
 
-        # midterm = midterm, final = final,
-        # test = anything else (e.g. Test_1 back when we did multiple tests per sem)
-        for key in ["midterm", "final", "test"]:
-            if ext == ".pdf" and key in doc_name:
-                doc_type = DocumentType.Test
-                for doc in documents:
-                    doc.metadata["type"] = key  # type: ignore[reportUnknownMemberType]
-                break
-        else:
-            doc_type = DocumentType.Doc
-            for doc in documents:
-                doc.metadata["type"] = "doc"  # type: ignore[reportUnknownMemberType]
+        tag = get_tag(file_path)
+        for doc in documents:
+            doc.metadata["group"] = tag  # type: ignore[reportUnknownMemberType]
 
-        # print(doc_type, file_path)
-        return doc_type, documents
+        return True, documents
 
     raise ValueError(f"Unsupported file {file_path} from {file_path}'")
 
@@ -116,10 +94,10 @@ def walk(path: Path) -> Iterable[Path]:
 
 
 def load_documents(
-    source_dir: str,
+    source_dir: Path,
     previous_files: set[str] | None = None,
     blacklist: set[str] | None = None,
-) -> tuple[SegregatedDocuments, set[str]]:
+) -> tuple[list[Document], set[str]]:
     """
     Returns a list of all documents loaded from the source documents directory
     (ignoring specified files) along with a new blacklist, which includes any new files
@@ -135,7 +113,7 @@ def load_documents(
     ignored_files = blacklist.union(previous_files)
 
     files: list[Path] = []
-    for p in walk(Path(source_dir)):
+    for p in walk(source_dir):
         doc_name = p.name.lower()
         ext = p.suffix.lower()
         if str(p) not in ignored_files:
@@ -163,43 +141,22 @@ def load_documents(
 
     with Pool(processes=cpus) as pool:
         docs: list[Document] = []
-        tests: list[Document] = []
         with tqdm(total=len(files), desc="Loading new documents", ncols=80) as pbar:
             for ret in pool.imap_unordered(load_single_document, files):
                 # Done this way so mypy doesn't complain
-                if ret[0] is DocumentType.Test:
-                    new_docs = ret[1]
-                    tests.extend(new_docs)
-                elif ret[0] is DocumentType.Doc:
+                if ret[0] is True:
                     new_docs = ret[1]
                     docs.extend(new_docs)
-                elif ret[0] is DocumentType.Empty:
+                else:
                     file_path = ret[1]
                     new_blacklist.add(str(file_path))
-                else:
-                    raise ValueError(f"Unsupported document type {ret[0]}")
                 _ = pbar.update()
 
     print(
-        f"Loaded and split into {len(docs)} chunks of text for docs"
-        + f" and {len(tests)} chunks of text for tests (max. {CHUNK_SIZE} tokens each)"
+        f"Loaded and split into {len(docs)} chunks of text (max. {CHUNK_SIZE} tokens each)"
     )
 
-    return SegregatedDocuments(docs=docs, tests=tests), new_blacklist
-
-
-def does_vectorstore_exist(
-    persist_directory: str, embeddings: HuggingFaceEmbeddings
-) -> bool:
-    """Checks if vectorstore exists"""
-    db = Chroma(
-        collection_name="docs",
-        persist_directory=persist_directory,
-        embedding_function=embeddings,
-    )
-    if not db.get()["documents"]:
-        return False
-    return True
+    return docs, new_blacklist
 
 
 def get_stored_file_sources(collections: list[Chroma]) -> set[str]:
@@ -216,7 +173,7 @@ def get_file_sources(docs: list[Document]) -> set[str]:
     return {doc.metadata["source"] + "\n" for doc in docs}  # type: ignore[reportUnknownMemberType]
 
 
-def write_sources(docs: SegregatedDocuments) -> None:
+def write_sources(docs: list[Document]) -> None:
     """Write the path of each file that was added to the database in this run
     (based on the given docs).
 
@@ -229,20 +186,15 @@ def write_sources(docs: SegregatedDocuments) -> None:
     records = get_ingest_dir() / "records"
     records.mkdir(exist_ok=True)
 
-    docs_sources = get_file_sources(docs.docs)
-    tests_sources = get_file_sources(docs.tests)
+    sources = get_file_sources(docs)
 
     with (records / "docs.txt").open("a+") as f:
-        f.writelines(docs_sources)
-    with (records / "tests.txt").open("a+") as f:
-        f.writelines(tests_sources)
+        f.writelines(sources)
 
     # Write the indiviual logs
     dt = datetime.strftime(datetime.now(), "%Y-%m-%d-%H.%M.%S")
     with (records / f"{dt}-docs.txt").open("w") as f:
-        f.writelines(docs_sources)
-    with (records / f"{dt}-tests.txt").open("w") as f:
-        f.writelines(tests_sources)
+        f.writelines(sources)
 
 
 def create_batches(
@@ -300,6 +252,28 @@ def ask_reset(client: chromadb.api.API):
             print("Unable to reset db")
 
 
+def get_collection(client: chromadb.api.API, embeddings: Embeddings) -> Chroma:
+    return Chroma(
+        collection_name=COLLECTION_NAME,
+        persist_directory=PERSIST_DIRECTORY,
+        embedding_function=embeddings,
+        client_settings=CHROMA_SETTINGS,
+        client=client,
+        collection_metadata={"hnsw:space": SIMILARITY_METRIC},
+    )
+
+
+def does_vectorstore_exist(
+    client: chromadb.api.API,
+    embeddings: Embeddings,
+) -> bool:
+    """Checks if vectorstore exists"""
+    db = get_collection(client, embeddings)
+    if not db.get()["documents"]:
+        return False
+    return True
+
+
 def main():
     # Create embeddings
     model_kwargs = {"device": "cuda"}
@@ -315,46 +289,29 @@ def main():
         settings=CHROMA_SETTINGS, path=PERSIST_DIRECTORY
     )
 
-    docs_db = Chroma(
-        collection_name="docs",
-        persist_directory=PERSIST_DIRECTORY,
-        embedding_function=embeddings,
-        client_settings=CHROMA_SETTINGS,
-        client=chroma_client,
-        collection_metadata={"hnsw:space": SIMILARITY_METRIC},
-    )
-    tests_db = Chroma(
-        collection_name="tests",
-        persist_directory=PERSIST_DIRECTORY,
-        embedding_function=embeddings,
-        client_settings=CHROMA_SETTINGS,
-        client=chroma_client,
-        collection_metadata={"hnsw:space": SIMILARITY_METRIC},
-    )
-    if does_vectorstore_exist(PERSIST_DIRECTORY, embeddings):
+    db = get_collection(chroma_client, embeddings)
+
+    if does_vectorstore_exist(chroma_client, embeddings):
         print(f"Appending to existing vectorstore at {PERSIST_DIRECTORY}")
 
         ask_reset(chroma_client)
 
         blacklist = read_blacklist()
-        ignored = get_stored_file_sources([docs_db, tests_db])
+        ignored = get_stored_file_sources([db])
 
-        texts, blacklist = load_documents(SOURCE_DIRECTORY, ignored, blacklist)
+        docs, blacklist = load_documents(SOURCE_DIRECTORY, ignored, blacklist)
     else:
         print(f"Creating new vectorstore at {PERSIST_DIRECTORY}")
-        texts, blacklist = load_documents(SOURCE_DIRECTORY)
+        docs, blacklist = load_documents(SOURCE_DIRECTORY)
 
     write_blacklist(blacklist)
 
-    write_sources(texts)
+    write_sources(docs)
 
-    add_documents(chroma_client, docs_db, "docs", texts.docs)
-    add_documents(chroma_client, tests_db, "tests", texts.tests)
+    add_documents(chroma_client, db, "docs", docs)
 
-    docs_db.persist()
-    docs_db = None
-    tests_db.persist()
-    tests_db = None
+    db.persist()
+    db = None
 
     print("Ingestion complete!")
 
