@@ -131,7 +131,7 @@ async def ask(
         return
 
     # Defer b/c loading vector DB from scratch takes longer than discord's response timeout
-    await interaction.response.defer()
+    await interaction.response.defer(thinking=True)
 
     start = timer()
     # docs = await docs_db.asimilarity_search_with_relevance_scores(
@@ -146,6 +146,7 @@ async def ask(
 
     embeds: list[discord.Embed] = []
     files: list[discord.File] = []
+    new_images = False
     for i, (doc, score) in enumerate(docs):
         source = Path(doc.metadata["source"])  # type: ignore[reportUnknownMemberType]
 
@@ -172,8 +173,11 @@ async def ask(
             url = url._replace(fragment=f"page={page}")
             title += f" - page {page}"
 
-            image_url = pdf_image(source, doc)
-            if image_url is not None:
+            res = pdf_image(source, doc)
+            if res is not None:
+                image_url, in_cache = res
+                new_images |= not in_cache
+
                 file = discord.File(image_url)
                 files.append(file)
                 embed = discord.Embed(title=title, url=url.geturl()).set_image(
@@ -195,6 +199,9 @@ async def ask(
         files=files,
         embeds=embeds,
     )
+
+    if new_images:
+        save_image_cache()
 
 
 @client.tree.command(
@@ -224,14 +231,18 @@ async def consent(interaction: discord.Interaction) -> None:
     )
 
 
-DocGroup.check_members()
+@client.tree.command(description="Admin only: shutdown the bot")
+@app_commands.checks.has_permissions(administrator=True)
+async def shutdown(interaction: discord.Interaction):
+    await interaction.response.send_message("Shutting down bot", ephemeral=True)
+    await interaction.client.close()
+    print("Shutdown bot")
 
-# Load the docment -> image translations from memory
-load_image_cache()
 
-try:
+if __name__ == "__main__":
+    DocGroup.check_members()
+
+    # Load the docment -> image translations from memory
+    load_image_cache()
+
     client.run(DISCORD_TOKEN)
-finally:
-    # We've loaded and maybe modified the image cache, so we need to save it
-    print("Saving pdf image cache")
-    save_image_cache()

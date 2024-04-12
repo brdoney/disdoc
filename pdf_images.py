@@ -81,10 +81,23 @@ def __search_pdf(
     return None
 
 
-def pdf_image(doc_path: Path, document: langchain.schema.Document) -> str | None:
+def pdf_image(
+    doc_path: Path, document: langchain.schema.Document
+) -> tuple[Path, bool] | None:
+    """Get a PDF image from a document - either from the cache or by generating it -
+    and return a URL to the image along with whether it was in the cache. If the
+    excerpt could not be found in the document, returns None.
+
+    Args:
+        doc_path: path to the file the document is from
+        document: the document (the relevant excerpt) we are interested in
+
+    Returns:
+        Either a path to the document
+    """
     key = document.metadata["source"] + document.page_content
     if key in __cached_images:
-        return __cached_images[key]
+        return Path(__cached_images[key]), True
 
     with fitz.open(doc_path) as pdf:  # type: ignore
         pdf = cast(fitz.Document, pdf)
@@ -103,9 +116,9 @@ def pdf_image(doc_path: Path, document: langchain.schema.Document) -> str | None
         if not os.path.isdir(__CACHE_FOLDER):
             os.mkdir(__CACHE_FOLDER)
 
-        image_name = f"{__CACHE_FOLDER}/image-{uuid.uuid4()}.png"
-        page.get_pixmap(dpi=144).save(image_name)  # type: ignore
+        image_path = Path(f"{__CACHE_FOLDER}/image-{uuid.uuid4()}.png")
+        page.get_pixmap(dpi=144).save(image_path)
 
-        __cached_images[key] = image_name
+        __cached_images[key] = str(image_path)
 
-        return image_name
+        return image_path, False
