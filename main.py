@@ -1,59 +1,31 @@
 import json
 import sqlite3
+from pathlib import Path
 from timeit import default_timer as timer
-from typing import Any, cast  # type: ignore[reportAny]
+from typing import Any  # type: ignore[reportAny]
 from urllib.parse import ParseResult, parse_qsl, urlencode, urlparse, urlunparse
 
-import chromadb
-import chromadb.config
 import discord
-from categories import AskCategory
+from categories import DocGroup
+from chroma import create_chroma_client, create_chroma_collection, create_embeddings
 from consent import check_consent
 from discord import app_commands
-from dotenv import load_dotenv
-from env_var import load_env
-from langchain.embeddings import HuggingFaceEmbeddings
-from langchain.vectorstores import Chroma
+from env_var import (
+    CONSENT_URL,
+    DISCORD_TOKEN,
+    MAPPINGS_PATH,
+    SOURCE_DIRECTORY,
+    SQLITE_DB,
+)
 from pdf_images import load_image_cache, pdf_image, save_image_cache
 from typing_extensions import override
-
-_ = load_dotenv()
-
-DISCORD_TOKEN = load_env("DISCORD_TOKEN")
-PERSIST_DIRECTORY = load_env("PERSIST_DIRECTORY")
-EMBEDDINGS_MODEL_NAME = load_env("EMBEDDINGS_MODEL_NAME")
-MAPPINGS_PATH = load_env("MAPPINGS_PATH")
-SIMILARITY_METRIC = load_env("SIMILARITY_METRIC", choices=["cosine", "l2", "ip"])
-SQLITE_DB = load_env("SQLITE_DB")
-CONSENT_URL = load_env("CONSENT_URL")
 
 with open(MAPPINGS_PATH) as f:
     NAME_TO_URL: dict[str, str] = json.load(f)
 
-embeddings = HuggingFaceEmbeddings(model_name=EMBEDDINGS_MODEL_NAME)
-CHROMA_SETTINGS = chromadb.config.Settings(
-    persist_directory=PERSIST_DIRECTORY, anonymized_telemetry=False
-)
-
-chroma_client = chromadb.PersistentClient(
-    settings=CHROMA_SETTINGS, path=PERSIST_DIRECTORY
-)
-docs_db = Chroma(
-    collection_name="docs",
-    client=chroma_client,
-    embedding_function=embeddings,
-    persist_directory=PERSIST_DIRECTORY,
-    client_settings=CHROMA_SETTINGS,
-    collection_metadata={"hnsw:space": SIMILARITY_METRIC},
-)
-tests_db = Chroma(
-    collection_name="tests",
-    client=chroma_client,
-    embedding_function=embeddings,
-    persist_directory=PERSIST_DIRECTORY,
-    client_settings=CHROMA_SETTINGS,
-    collection_metadata={"hnsw:space": SIMILARITY_METRIC},
-)
+embeddings = create_embeddings()
+chroma_client = create_chroma_client()
+docs_db = create_chroma_collection(chroma_client, embeddings)
 
 sqlite_cursor = sqlite3.connect(SQLITE_DB).cursor()
 
@@ -130,13 +102,25 @@ def add_query_params(url: ParseResult, pairs: dict[str, Any]) -> ParseResult:
     return url._replace(query=urlencode(query))
 
 
+def remove_group(path: Path) -> Path:
+    """Remove everything up to and including the group part of a path.
+
+    Example:
+
+        >>> remove_group(Path("source_documents/ex0/cs3214/sample.txt"))
+        "cs3214/sample.txt"
+    """
+    after_group = path.relative_to(SOURCE_DIRECTORY).parts[1:]
+    return Path(*after_group)
+
+
 @client.tree.command(description="Ask for documents related to your question")
 @app_commands.describe(
     question="Question or statement you want to find documents regarding"
 )
 async def ask(
     interaction: discord.Interaction,
-    category: AskCategory,
+    category: DocGroup,
     question: str,
 ):
     if check_consent(sqlite_cursor, interaction.user.id) is None:
@@ -150,18 +134,12 @@ async def ask(
     await interaction.response.defer()
 
     start = timer()
-    if category == AskCategory.tests:
-        docs = await tests_db.asimilarity_search_with_relevance_scores(question)
-    elif category == AskCategory.midterm:
-        docs = await tests_db.asimilarity_search_with_relevance_scores(
-            question, filter={"type": "midterm"}
-        )
-    elif category == AskCategory.final:
-        docs = await tests_db.asimilarity_search_with_relevance_scores(
-            question, filter={"type": "final"}
-        )
-    else:
-        docs = await docs_db.asimilarity_search_with_relevance_scores(question)
+    # docs = await docs_db.asimilarity_search_with_relevance_scores(
+    #     question, filter=category.get_filter()
+    # )
+    docs = await docs_db.asimilarity_search_with_relevance_scores(
+        question, filter=category.get_filter()
+    )
     # docs = await db.amax_marginal_relevance_search(question)
     end = timer()
     print(f"{end - start}s")
@@ -169,9 +147,9 @@ async def ask(
     embeds: list[discord.Embed] = []
     files: list[discord.File] = []
     for i, (doc, score) in enumerate(docs):
-        source = cast(str, doc.metadata["source"]).strip()  # type: ignore[reportUnknownMemberType]
+        source = Path(doc.metadata["source"])  # type: ignore[reportUnknownMemberType]
 
-        url_str = NAME_TO_URL[source.removeprefix("source_documents/")]
+        url_str = NAME_TO_URL[str(remove_group(source))]
         # Add rec_id to prevent duplicate links (separate snippets in the same file) from grouping together
         url = add_query_params(urlparse(url_str), {"rec_id": i})
 
@@ -245,6 +223,8 @@ async def consent(interaction: discord.Interaction) -> None:
         ephemeral=True,
     )
 
+
+DocGroup.check_members()
 
 # Load the docment -> image translations from memory
 load_image_cache()

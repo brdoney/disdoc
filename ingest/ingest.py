@@ -11,41 +11,22 @@ from typing import Literal
 import chromadb
 import chromadb.api
 import chromadb.config
-from dotenv import load_dotenv
-from langchain.embeddings.base import Embeddings
-from env_var import load_env
+from chroma import create_chroma_client, create_chroma_collection, create_embeddings
+from env_var import PERSIST_DIRECTORY, SOURCE_DIRECTORY
 from langchain.docstore.document import Document
-from langchain.embeddings import HuggingFaceEmbeddings
+from langchain.embeddings.base import Embeddings
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.vectorstores import Chroma
 from tqdm import tqdm
 
 from .loaders import LOADER_MAPPING, get_ingest_dir
 
-# Will share dotenv with outer directory
-if not load_dotenv():
-    print(
-        "Could not load .env file or it is empty. Please check if it exists and is readable."
-    )
-    exit(1)
-
-
-# Load environment variables
-PERSIST_DIRECTORY = load_env("PERSIST_DIRECTORY")
-SOURCE_DIRECTORY = Path(load_env("SOURCE_DIRECTORY", "source_documents"))
-EMBEDDINGS_MODEL_NAME = load_env("EMBEDDINGS_MODEL_NAME")
-SIMILARITY_METRIC = load_env("SIMILARITY_METRIC", choices=["cosine", "l2", "ip"])
-COLLECTION_NAME = "docs"
+# Constants
 CHUNK_SIZE = 500
 CHUNK_OVERLAP = 50
 
-# Chroma settings, used in client
-CHROMA_SETTINGS = chromadb.config.Settings(
-    persist_directory=PERSIST_DIRECTORY, anonymized_telemetry=False
-)
 
-
-def get_tag(file_path: Path) -> str:
+def get_group(file_path: Path) -> str:
     # Will look like ex0/cs3214/..., so we can use parts[0]
     rel = file_path.relative_to(SOURCE_DIRECTORY)
     return rel.parts[0]
@@ -76,7 +57,7 @@ def load_single_document(
             print("Empty", file_path)
             return False, file_path
 
-        tag = get_tag(file_path)
+        tag = get_group(file_path)
         for doc in documents:
             doc.metadata["group"] = tag  # type: ignore[reportUnknownMemberType]
 
@@ -252,23 +233,12 @@ def ask_reset(client: chromadb.api.API):
             print("Unable to reset db")
 
 
-def get_collection(client: chromadb.api.API, embeddings: Embeddings) -> Chroma:
-    return Chroma(
-        collection_name=COLLECTION_NAME,
-        persist_directory=PERSIST_DIRECTORY,
-        embedding_function=embeddings,
-        client_settings=CHROMA_SETTINGS,
-        client=client,
-        collection_metadata={"hnsw:space": SIMILARITY_METRIC},
-    )
-
-
 def does_vectorstore_exist(
     client: chromadb.api.API,
     embeddings: Embeddings,
 ) -> bool:
     """Checks if vectorstore exists"""
-    db = get_collection(client, embeddings)
+    db = create_chroma_collection(client, embeddings)
     if not db.get()["documents"]:
         return False
     return True
@@ -276,20 +246,12 @@ def does_vectorstore_exist(
 
 def main():
     # Create embeddings
-    model_kwargs = {"device": "cuda"}
-    encode_kwargs = {"show_progress_bar": True}
-    embeddings = HuggingFaceEmbeddings(
-        model_name=EMBEDDINGS_MODEL_NAME,
-        model_kwargs=model_kwargs,
-        encode_kwargs=encode_kwargs,
-    )
+    embeddings = create_embeddings(True)
 
     # Chroma client
-    chroma_client = chromadb.PersistentClient(
-        settings=CHROMA_SETTINGS, path=PERSIST_DIRECTORY
-    )
+    chroma_client = create_chroma_client()
 
-    db = get_collection(chroma_client, embeddings)
+    db = create_chroma_collection(chroma_client, embeddings)
 
     if does_vectorstore_exist(chroma_client, embeddings):
         print(f"Appending to existing vectorstore at {PERSIST_DIRECTORY}")

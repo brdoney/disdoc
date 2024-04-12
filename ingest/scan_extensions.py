@@ -2,7 +2,9 @@ from collections.abc import Iterable
 from pathlib import Path
 import pprint
 
-start_dir = Path("./source_documents")
+from env_var import SOURCE_DIRECTORY
+
+start_dir = SOURCE_DIRECTORY
 by_extensions: dict[str, list[Path]] = {}
 
 

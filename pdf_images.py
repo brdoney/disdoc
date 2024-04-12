@@ -5,6 +5,7 @@ import langchain.schema
 import uuid
 import os
 import pickle
+from pathlib import Path
 
 __CACHE_FOLDER = "./cache"
 
@@ -80,7 +81,7 @@ def __search_pdf(
     return None
 
 
-def pdf_image(doc_path: str, document: langchain.schema.Document) -> str | None:
+def pdf_image(doc_path: Path, document: langchain.schema.Document) -> str | None:
     key = document.metadata["source"] + document.page_content
     if key in __cached_images:
         return __cached_images[key]
