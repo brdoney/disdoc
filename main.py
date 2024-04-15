@@ -5,20 +5,24 @@ from timeit import default_timer as timer
 from typing import Any  # type: ignore[reportAny]
 from urllib.parse import ParseResult, parse_qsl, urlencode, urlparse, urlunparse
 
+import aiohttp
 import discord
+from discord import app_commands
+from langchain import PromptTemplate
+from typing_extensions import override
+
 from categories import DocGroup
 from chroma import create_chroma_client, create_chroma_collection, create_embeddings
 from consent import check_consent
-from discord import app_commands
 from env_var import (
     CONSENT_URL,
     DISCORD_TOKEN,
+    LLAMA_API_URL,
     MAPPINGS_PATH,
     SOURCE_DIRECTORY,
     SQLITE_DB,
 )
 from pdf_images import load_image_cache, pdf_image, save_image_cache
-from typing_extensions import override
 
 with open(MAPPINGS_PATH) as f:
     NAME_TO_URL: dict[str, str] = json.load(f)
@@ -31,6 +35,14 @@ sqlite_cursor = sqlite3.connect(SQLITE_DB).cursor()
 
 intents = discord.Intents.default()
 intents.message_content = True
+
+prompt = PromptTemplate.from_file("./prompt_template.txt", ["question", "context"])
+llama_defaults = {
+    "stream": False,
+    "n_predict": 500,
+    "temperature": 0,
+    "stop": ["</s>"],
+}
 
 
 class MyClient(discord.Client):
@@ -142,7 +154,7 @@ async def ask(
     )
     # docs = await db.amax_marginal_relevance_search(question)
     end = timer()
-    print(f"{end - start}s")
+    print(f"Retrieval: {end - start}s")
 
     embeds: list[discord.Embed] = []
     files: list[discord.File] = []
@@ -193,6 +205,9 @@ async def ask(
 
         embeds.append(embed)
 
+    if new_images:
+        save_image_cache()
+
     # We use followup since we deferred earlier
     await interaction.followup.send(
         f"> {question}",
@@ -200,8 +215,23 @@ async def ask(
         embeds=embeds,
     )
 
-    if new_images:
-        save_image_cache()
+    # Send a message to mark that we're generating the answer
+    msg = await interaction.followup.send("Generating answer...", wait=True)
+
+    context = "\n".join(doc.page_content for (doc, _) in docs)
+
+    formatted = prompt.format(question=question, context=context)
+    params = llama_defaults | {"prompt": formatted}
+    async with aiohttp.ClientSession() as session:
+        start = timer()
+        req = await session.post(f"{LLAMA_API_URL}/completion", json=params)
+        data = await req.json()  # type: ignore[reportAny]
+        answer: str = data["content"]
+        end = timer()
+        print(f"Generation: {end - start}s")
+
+
+    _ = await msg.edit(content=answer)
 
 
 @client.tree.command(
