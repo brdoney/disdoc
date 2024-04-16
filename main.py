@@ -137,7 +137,8 @@ async def ask(
     if check_consent(sqlite_cursor, interaction.user.id) is None:
         await interaction.response.send_message(
             "You have not indicated your consent status. "
-            + "Please do so with the `/consent` command before using any other commands."
+            + "Please do so with the `/consent` command before using any other commands.",
+            ephemeral=True,
         )
         return
 
@@ -207,7 +208,9 @@ async def ask(
     if new_images:
         save_image_cache()
 
-    retrieval_review = ReviewButtonView(PostType.RETRIEVAL, str(interaction.id))
+    retrieval_review = ReviewButtonView(
+        PostType.RETRIEVAL, str(interaction.id), sqlite_cursor
+    )
 
     # We use followup since we deferred earlier
     await interaction.followup.send(
@@ -241,7 +244,7 @@ async def ask(
         # print(f"edit: {after - before}")
         # before = timer()
 
-    llm_review = ReviewButtonView(PostType.LLM, str(interaction.id))
+    llm_review = ReviewButtonView(PostType.LLM, str(interaction.id), sqlite_cursor)
 
     # Just in case last necessary edit didn't go through due to timeout
     # Also take the time to add a review button

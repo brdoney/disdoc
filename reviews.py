@@ -1,9 +1,12 @@
-from enum import Enum, auto
+import sqlite3
 from abc import ABC, abstractmethod
+from enum import Enum, auto
 
 import discord
 from discord import SelectOption
 from typing_extensions import Self, override
+
+from consent import check_consent
 
 
 class PostType(Enum):
@@ -186,17 +189,28 @@ class LLMReviewView(ReviewView):
 
 
 class ReviewButtonView(discord.ui.View):
-    def __init__(self, post_type: PostType, post_id: str):
+    def __init__(
+        self, post_type: PostType, post_id: str, sqlite_cursor: sqlite3.Cursor
+    ):
         super().__init__()
         self.post_type = post_type
         # Interaction for buttons will be different than our original thread's
         # so we need to save the original one for logging purposes
         self.post_id = post_id
+        self.sqlite_cursor = sqlite_cursor
 
     @discord.ui.button(label="Start Review", style=discord.ButtonStyle.primary)
     async def start_review(
         self, interaction: discord.Interaction, _: discord.ui.Button[Self]
     ):
+        if check_consent(self.sqlite_cursor, interaction.user.id) is None:
+            await interaction.response.send_message(
+                "You have not indicated your consent status. "
+                + "Please do so with the `/consent` command before using any other commands.",
+                ephemeral=True,
+            )
+            return
+
         if self.post_type is PostType.RETRIEVAL:
             view = RetrievalReviewView(self.post_id)
         elif self.post_type is PostType.LLM:
