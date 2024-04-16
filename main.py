@@ -5,10 +5,9 @@ from timeit import default_timer as timer
 from typing import Any  # type: ignore[reportAny]
 from urllib.parse import ParseResult, parse_qsl, urlencode, urlparse, urlunparse
 
-import aiohttp
 import discord
 from discord import app_commands
-from langchain import PromptTemplate
+from discord.ext import commands
 from typing_extensions import override
 
 from categories import DocGroup
@@ -17,11 +16,11 @@ from consent import check_consent
 from env_var import (
     CONSENT_URL,
     DISCORD_TOKEN,
-    LLAMA_API_URL,
     MAPPINGS_PATH,
     SOURCE_DIRECTORY,
     SQLITE_DB,
 )
+from llm import LLMType
 from pdf_images import load_image_cache, pdf_image, save_image_cache
 
 with open(MAPPINGS_PATH) as f:
@@ -36,13 +35,12 @@ sqlite_cursor = sqlite3.connect(SQLITE_DB).cursor()
 intents = discord.Intents.default()
 intents.message_content = True
 
-prompt = PromptTemplate.from_file("./prompt_template.txt", ["question", "context"])
-llama_defaults = {
-    "stream": False,
-    "n_predict": 500,
-    "temperature": 0,
-    "stop": ["</s>"],
-}
+
+edit_buffer_tokens = 8
+"""Number of tokens to buffer before editing a message"""
+
+llm_type: LLMType = LLMType.OPENAI
+"""The LLM we're using"""
 
 
 class MyClient(discord.Client):
@@ -218,20 +216,29 @@ async def ask(
     # Send a message to mark that we're generating the answer
     msg = await interaction.followup.send("Generating answer...", wait=True)
 
-    context = "\n".join(doc.page_content for (doc, _) in docs)
+    n_tokens = 1
+    # before = timer()
+    line = None
 
-    formatted = prompt.format(question=question, context=context)
-    params = llama_defaults | {"prompt": formatted}
-    async with aiohttp.ClientSession() as session:
-        start = timer()
-        req = await session.post(f"{LLAMA_API_URL}/completion", json=params)
-        data = await req.json()  # type: ignore[reportAny]
-        answer: str = data["content"]
-        end = timer()
-        print(f"Generation: {end - start}s")
+    # The Discord edit usually throttles after 3-4 llama.cpp tokens (with delays as high as 2s)
+    # async for line in llm.llama(question, docs):
+    async for line in llm_type(question, docs):
+        if n_tokens < edit_buffer_tokens:
+            n_tokens += 1
+            continue
+        n_tokens = 1
 
+        # after = timer()
+        # print(f"llama.cpp token: {after - before}")
+        # before = timer()
+        msg = await msg.edit(content=line)
+        # after = timer()
+        # print(f"edit: {after - before}")
+        # before = timer()
 
-    _ = await msg.edit(content=answer)
+    if n_tokens < edit_buffer_tokens and line is not None:
+        # We ran out of tokens before buffer was filled, so make sure the edit goes through
+        msg = await msg.edit(content=line)
 
 
 @client.tree.command(
@@ -261,12 +268,52 @@ async def consent(interaction: discord.Interaction) -> None:
     )
 
 
+@client.tree.command(description="Admin only: get or set the edit buffer")
+@app_commands.checks.has_permissions(administrator=True)
+async def editbuffer(interaction: discord.Interaction, num_tokens: int | None = None):
+    global edit_buffer_tokens
+    if num_tokens is None:
+        await interaction.response.send_message(
+            f"Edit buffer is currently {edit_buffer_tokens} tokens", ephemeral=True
+        )
+    else:
+        edit_buffer_tokens = num_tokens
+        await interaction.response.send_message(
+            f"Set edit buffer to {num_tokens} tokens", ephemeral=True
+        )
+
+
+@client.tree.command(description="Admin only: get or set the LLM type")
+@app_commands.checks.has_permissions(administrator=True)
+async def llmtype(
+    interaction: discord.Interaction, new_llm: LLMType | None = None
+):
+    global llm_type
+    if new_llm is None:
+        await interaction.response.send_message(
+            f"LLM type is currently {llm_type.name}", ephemeral=True
+        )
+    else:
+        llm_type = new_llm
+        await interaction.response.send_message(
+            f"Set LLM type to {new_llm.name}", ephemeral=True
+        )
+
+
 @client.tree.command(description="Admin only: shutdown the bot")
 @app_commands.checks.has_permissions(administrator=True)
 async def shutdown(interaction: discord.Interaction):
     await interaction.response.send_message("Shutting down bot", ephemeral=True)
     await interaction.client.close()
     print("Shutdown bot")
+
+
+@client.event
+async def on_command_error(_: commands.Context, error: Exception):  # type: ignore[reportMissingTypeArgument]
+    if isinstance(error, discord.HTTPException):
+        print("Hit ratelimit:", error)
+    else:
+        print("Unknown error:", error)
 
 
 if __name__ == "__main__":
