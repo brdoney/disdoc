@@ -22,6 +22,7 @@ from env_var import (
 )
 from llm import LLMType
 from pdf_images import load_image_cache, pdf_image, save_image_cache
+from reviews import PostType, ReviewButtonView
 
 with open(MAPPINGS_PATH) as f:
     NAME_TO_URL: dict[str, str] = json.load(f)
@@ -39,7 +40,7 @@ intents.message_content = True
 edit_timer = 0.3
 """Number of tokens to buffer before editing a message. Theoretically, `1/5=0.2` is the minimum value."""
 
-llm_type: LLMType = LLMType.OPENAI
+llm_type: LLMType = LLMType.MOCK
 """The LLM we're using"""
 
 
@@ -59,7 +60,7 @@ client = MyClient(intents=intents)
 
 @client.event
 async def on_ready():
-    print("Running Chroma Bot!")
+    print("Running bot!")
     if client.user is None:
         print("Not logged in. An error must have occurred")
     else:
@@ -206,11 +207,14 @@ async def ask(
     if new_images:
         save_image_cache()
 
+    retrieval_review = ReviewButtonView(PostType.RETRIEVAL, str(interaction.id))
+
     # We use followup since we deferred earlier
     await interaction.followup.send(
         f"> {question}",
         files=files,
         embeds=embeds,
+        view=retrieval_review,
     )
 
     # Send a message to mark that we're generating the answer
@@ -237,8 +241,11 @@ async def ask(
         # print(f"edit: {after - before}")
         # before = timer()
 
+    llm_review = ReviewButtonView(PostType.LLM, str(interaction.id))
+
     # Just in case last necessary edit didn't go through due to timeout
-    msg = await msg.edit(content=line)
+    # Also take the time to add a review button
+    msg = await msg.edit(content=line, view=llm_review)
 
 
 @client.tree.command(
