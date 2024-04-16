@@ -126,11 +126,12 @@ def remove_group(path: Path) -> Path:
 
 
 @client.tree.command(description="Ask for documents related to your question")
-@app_commands.describe(
-    question="Question or statement you want to find documents regarding"
-)
+@app_commands.describe(use_llm="Whether to generate an answer using an LLM")
+@app_commands.describe(category="The category this question is about")
+@app_commands.describe(question="Question or statement you're interested in")
 async def ask(
     interaction: discord.Interaction,
+    use_llm: bool,
     category: DocGroup,
     question: str,
 ):
@@ -219,6 +220,10 @@ async def ask(
         embeds=embeds,
         view=retrieval_review,
     )
+
+    # Don't continue if we're not generating the answer with an LLM
+    if not use_llm:
+        return
 
     # Send a message to mark that we're generating the answer
     msg = await interaction.followup.send("Generating answer...", wait=True)
