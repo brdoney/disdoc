@@ -101,7 +101,7 @@ def _update_grade(
     """
     # Alternative using UPDATE FROM
     # query = f"""
-    # UPDATE grading 
+    # UPDATE grading
     #     SET {col} = {col} + 1
     #     FROM (SELECT pid, id FROM users WHERE id = ?) as u
     #     WHERE grading.pid = u.pid
@@ -121,7 +121,7 @@ def log_llm_review(
     if post_id is not None:
         assert author.consent, "Trying to log LLM review for user who denied consent"
         _ = cur.execute(
-            "INSERT INTO llm_reviews (post_id, author, relevance, helpfulness, correctness) VALUES (?, ?, ?, ?, ?)",
+            "INSERT OR REPLACE INTO llm_reviews (post_id, author, relevance, helpfulness, correctness) VALUES (?, ?, ?, ?, ?)",
             (post_id, author.id, relevance, helpfulness, correctness),
         )
     _update_grade(cur, author, "llm_reviews")
@@ -141,7 +141,7 @@ def log_retrieval_review(
             author.consent
         ), "Trying to log retrieval review for user who denied consent"
         _ = cur.execute(
-            "INSERT INTO retrieval_reviews (post_id, author, relevance, helpfulness) VALUES (?, ?, ?, ?)",
+            "INSERT OR REPLACE INTO retrieval_reviews (post_id, author, relevance, helpfulness) VALUES (?, ?, ?, ?)",
             (post_id, author.id, relevance, helpfulness),
         )
     _update_grade(cur, author, "retrieval_reviews")
