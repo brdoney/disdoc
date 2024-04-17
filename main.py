@@ -1,12 +1,12 @@
 import json
+from dataclasses import dataclass
 from pathlib import Path
 from timeit import default_timer as timer
 from typing import Any  # type: ignore[reportAny]
 from urllib.parse import ParseResult, parse_qsl, urlencode, urlparse
 
-from dataclasses import dataclass
-from dataclasses_json import DataClassJsonMixin
 import discord
+from dataclasses_json import DataClassJsonMixin
 from discord import app_commands
 from discord.ext import commands
 from typing_extensions import override
@@ -22,7 +22,7 @@ from env_var import (
 )
 from llm import LLMType
 from pdf_images import load_image_cache, pdf_image, save_image_cache
-from reviews import PostType, ReviewButtonView
+from reviews import ReviewButtonView, ReviewType
 from sqlite_db import check_consent, log_post, log_post_times
 
 with open(MAPPINGS_PATH) as f:
@@ -132,11 +132,13 @@ def remove_group(path: Path) -> Path:
     return Path(*after_group)
 
 
-def get_click_url(dest: ParseResult, post_id: int, rec_id: int) -> ParseResult:
+def get_click_url(dest: ParseResult, post_id: int | None, rec_id: int) -> ParseResult:
     # Add rec_id to prevent duplicate links (separate snippets in the same file) from grouping together
-    return add_query_params(
-        CLICK_URL, {"postid": post_id, "to": dest.geturl(), "rec_id": rec_id}
-    )
+    params = {"to": dest.geturl(), "rec_id": rec_id}
+    if post_id is not None:
+        params["postid"] = post_id
+
+    return add_query_params(CLICK_URL, params)
 
 
 @dataclass
@@ -250,7 +252,7 @@ async def ask(
     if new_images:
         save_image_cache()
 
-    retrieval_review = ReviewButtonView(PostType.RETRIEVAL, post_id)
+    retrieval_review = ReviewButtonView(ReviewType.RETRIEVAL, post_id)
 
     # We use followup since we deferred earlier
     await interaction.followup.send(
@@ -295,19 +297,21 @@ async def ask(
         # We have the full answer now
         answer = line
 
-        llm_review = ReviewButtonView(PostType.LLM, post_id)
+        llm_review = ReviewButtonView(ReviewType.LLM, post_id)
 
         # Just in case last necessary edit didn't go through due to timeout
         # Also take the time to add a review button
         msg = await msg.edit(content=answer, view=llm_review)
 
-    log_post_times(post_id, retrieval_time, generation_time)
+    if post_id is not None:
+        # Only log info if we have a post on the books (i.e. consent was given)
 
-    # TODO: Save content of post and LLM response somewhere
-    record = AskRecord(post_id, embed_records, answer)
-    with (RECORDS_DIR / f"post_{post_id}.json").open("w") as f:
-        s = record.to_json(indent=2)  # type: ignore[reportUnknownMemberType]
-        _ = f.write(s)
+        log_post_times(post_id, retrieval_time, generation_time)
+
+        record = AskRecord(post_id, embed_records, answer)
+        with (RECORDS_DIR / f"post_{post_id}.json").open("w") as f:
+            s = record.to_json(indent=2)  # type: ignore[reportUnknownMemberType]
+            _ = f.write(s)
 
 
 @client.tree.command(

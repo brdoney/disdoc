@@ -1,5 +1,5 @@
 import sqlite3
-from typing import NamedTuple
+from typing import Literal, NamedTuple
 
 from typing_extensions import overload
 
@@ -47,9 +47,11 @@ def check_consent(discord_id: int) -> UserInfo | None:
 
 def log_post(
     post_discord_id: int, author: UserInfo, use_llm: bool, llm_type: LLMType
-) -> int:
-    """Logs a post and returns its ID in the database. Requires that the author gave consent."""
-    assert author.consent
+) -> int | None:
+    """Logs a post and returns its ID in the database if a user has given consent,
+    otherwise does nothing and returns `None`."""
+    if not author.consent:
+        return None
 
     cur = db.execute(
         "INSERT INTO posts (post_id, author, use_llm, llm_type) VALUES (?, ?, ?, ?)",
@@ -86,31 +88,64 @@ def log_post_times(post_id: int, retrieval_time: float, generation_time: float |
     print(f"Updated times for {post_id}")
 
 
-def log_llm_review(
-    post_id: int, author: UserInfo, relevance: int, helpfulness: int, correctness: int
+def _update_grade(
+    cur: sqlite3.Cursor,
+    user: UserInfo,
+    col: Literal["llm_reviews"] | Literal["retrieval_reviews"],
 ):
-    """Logs a review of an LLM response. Requires that the author gave consent."""
-    assert author.consent
+    # Use sub-query so we don't store PID anywhere
+    query = f"""
+    UPDATE grading 
+        SET {col} = {col} + 1
+        WHERE pid IN (SELECT pid FROM users WHERE id = ?)
+    """
+    # Alternative using UPDATE FROM
+    # query = f"""
+    # UPDATE grading 
+    #     SET {col} = {col} + 1
+    #     FROM (SELECT pid, id FROM users WHERE id = ?) as u
+    #     WHERE grading.pid = u.pid
+    # """
+    _ = cur.execute(query, (user.id,))
 
-    _ = db.execute(
-        "INSERT INTO llm_reviews (post_id, author, relevance, helpfulness, correctness) VALUES (?, ?, ?, ?, ?)",
-        (post_id, author.id, relevance, helpfulness, correctness),
-    )
+
+def log_llm_review(
+    post_id: int | None,
+    author: UserInfo,
+    relevance: int,
+    helpfulness: int,
+    correctness: int,
+):
+    """Log an LLM review by updating a user's grade and, if they gave consent, storing its contents."""
+    cur = db.cursor()
+    if post_id is not None:
+        assert author.consent, "Trying to log LLM review for user who denied consent"
+        _ = cur.execute(
+            "INSERT INTO llm_reviews (post_id, author, relevance, helpfulness, correctness) VALUES (?, ?, ?, ?, ?)",
+            (post_id, author.id, relevance, helpfulness, correctness),
+        )
+    _update_grade(cur, author, "llm_reviews")
+
     db.commit()
 
-    print(f"Logged LLM review for post {post_id} by {author}")
+    print(f"Logged LLM review for post {post_id}")
 
 
 def log_retrieval_review(
-    post_id: int, author: UserInfo, relevance: int, helpfulness: int
+    post_id: int | None, author: UserInfo, relevance: int, helpfulness: int
 ):
-    """Logs a review of a retrieval response. Requires that the author gave consent."""
-    assert author.consent
+    """Log an retrieval review by updating a user's grade and, if they gave consent, storing its contents."""
+    cur = db.cursor()
+    if post_id is not None:
+        assert (
+            author.consent
+        ), "Trying to log retrieval review for user who denied consent"
+        _ = cur.execute(
+            "INSERT INTO retrieval_reviews (post_id, author, relevance, helpfulness) VALUES (?, ?, ?, ?)",
+            (post_id, author.id, relevance, helpfulness),
+        )
+    _update_grade(cur, author, "retrieval_reviews")
 
-    _ = db.execute(
-        "INSERT INTO retrieval_reviews (post_id, author, relevance, helpfulness) VALUES (?, ?, ?, ?)",
-        (post_id, author.id, relevance, helpfulness),
-    )
     db.commit()
 
-    print(f"Logged retrieval review for post {post_id} by {author}")
+    print(f"Logged retrieval review for post {post_id}")

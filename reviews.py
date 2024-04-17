@@ -8,7 +8,7 @@ from typing_extensions import Self, override
 from sqlite_db import UserInfo, check_consent, log_llm_review, log_retrieval_review
 
 
-class PostType(Enum):
+class ReviewType(Enum):
     RETRIEVAL = auto()
     LLM = auto()
 
@@ -39,8 +39,11 @@ _RELEVANCE_OPTIONS = [
 
 
 class ReviewView(discord.ui.View, ABC):
-    def __init__(self, user: UserInfo):
+    def __init__(self, post_id: int | None, user: UserInfo):
         super().__init__()
+        # The ID of the post that this is originally for
+        self.post_id = post_id
+        # The user who is using this UI
         self.user = user
 
     @abstractmethod
@@ -49,7 +52,7 @@ class ReviewView(discord.ui.View, ABC):
         raise NotImplementedError()
 
     @abstractmethod
-    def log_review(self, user: UserInfo) -> None:
+    def log_review(self) -> None:
         """Log the results of the review. Called when view is complete."""
         raise NotImplementedError()
 
@@ -63,8 +66,9 @@ class ReviewView(discord.ui.View, ABC):
             await interaction.response.edit_message(
                 content="Review Complete!", view=self
             )
-            if self.user.consent:
-                self.log_review(self.user)
+            # May or may not save content of review, depending on consent status
+            # The SQL functions that subclasses use should take care of this check for us
+            self.log_review()
         else:
             # Mark the form as incomplete
             await interaction.response.edit_message(
@@ -74,10 +78,8 @@ class ReviewView(discord.ui.View, ABC):
 
 
 class RetrievalReviewView(ReviewView):
-    def __init__(self, post_id: int, user: UserInfo):
-        super().__init__(user)
-        # The ID of the post that this is originally for
-        self.post_id = post_id
+    def __init__(self, post_id: int | None, user: UserInfo):
+        super().__init__(post_id, user)
         self.helpfulness: int | None = None
         self.relevance: int | None = None
 
@@ -86,12 +88,11 @@ class RetrievalReviewView(ReviewView):
         return all(val is not None for val in (self.relevance, self.helpfulness))
 
     @override
-    def log_review(self, user: UserInfo) -> None:
-        if not self.is_review_complete():
-            raise RuntimeError("Trying to log unfinished retrieval review")
+    def log_review(self) -> None:
+        assert self.is_review_complete(), "Trying to log unfinished retrieval review"
         log_retrieval_review(
             self.post_id,
-            user,
+            self.user,
             self.relevance,  # type: ignore[reportArgumentType]
             self.helpfulness,  # type: ignore[reportArgumentType]
         )
@@ -130,10 +131,8 @@ class RetrievalReviewView(ReviewView):
 
 
 class LLMReviewView(ReviewView):
-    def __init__(self, post_id: int, user: UserInfo):
-        super().__init__(user)
-        # The ID of the post that this is originally for
-        self.post_id = post_id
+    def __init__(self, post_id: int | None, user: UserInfo):
+        super().__init__(post_id, user)
         self.helpfulness: int | None = None
         self.correctness: int | None = None
         self.relevance: int | None = None
@@ -146,12 +145,11 @@ class LLMReviewView(ReviewView):
         )
 
     @override
-    def log_review(self, user: UserInfo) -> None:
-        if not self.is_review_complete():
-            raise RuntimeError("Trying to log unfinished LLM review")
+    def log_review(self) -> None:
+        assert self.is_review_complete(), "Trying to log unfinished LLM review"
         log_llm_review(
             self.post_id,
-            user,
+            self.user,
             self.relevance,  # type: ignore[reportArgumentType]
             self.helpfulness,  # type: ignore[reportArgumentType]
             self.correctness,  # type: ignore[reportArgumentType]
@@ -204,7 +202,7 @@ class LLMReviewView(ReviewView):
 
 
 class ReviewButtonView(discord.ui.View):
-    def __init__(self, post_type: PostType, post_id: int):
+    def __init__(self, post_type: ReviewType, post_id: int | None):
         super().__init__()
         self.post_type = post_type
         """What kind of post this button view is attached to"""
@@ -224,9 +222,9 @@ class ReviewButtonView(discord.ui.View):
             )
             return
 
-        if self.post_type is PostType.RETRIEVAL:
+        if self.post_type is ReviewType.RETRIEVAL:
             view = RetrievalReviewView(self.post_id, user)
-        elif self.post_type is PostType.LLM:
+        elif self.post_type is ReviewType.LLM:
             view = LLMReviewView(self.post_id, user)
         else:
             raise ValueError(f"Unsupported PostType {self.post_type}")
