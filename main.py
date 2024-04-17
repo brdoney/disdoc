@@ -4,6 +4,8 @@ from timeit import default_timer as timer
 from typing import Any  # type: ignore[reportAny]
 from urllib.parse import ParseResult, parse_qsl, urlencode, urlparse
 
+from dataclasses import dataclass
+from dataclasses_json import DataClassJsonMixin
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -32,13 +34,21 @@ docs_db = create_chroma_collection(chroma_client, embeddings)
 
 _intents = discord.Intents.default()
 _intents.message_content = True
+_activity = discord.Activity(type=discord.ActivityType.playing, name="/ask")
 
+RECORDS_DIR = Path("./records").resolve()
+"""Directory to store records of posts in"""
+# Make the records directory if it doesn't exist already
+RECORDS_DIR.mkdir(exist_ok=True)
 
 edit_timer = 0.3
 """Number of tokens to buffer before editing a message. Theoretically, `1/5=0.2` is the minimum value."""
 
 llm_type: LLMType = LLMType.MOCK
 """The LLM we're using"""
+
+# Load the docment -> image translations from memory
+load_image_cache()
 
 
 class MyClient(discord.Client):
@@ -52,7 +62,6 @@ class MyClient(discord.Client):
         print(f"Synced {len(synced)} command(s)")
 
 
-_activity = discord.Activity(type=discord.ActivityType.playing, name="/ask")
 client = MyClient(intents=_intents, activity=_activity)
 
 
@@ -130,6 +139,22 @@ def get_click_url(dest: ParseResult, post_id: int, rec_id: int) -> ParseResult:
     )
 
 
+@dataclass
+class EmbedRecord(DataClassJsonMixin):
+    title: str
+    content: str
+    dest: str
+    score: float
+    image: str | None = None
+
+
+@dataclass
+class AskRecord(DataClassJsonMixin):
+    post_id: int
+    embeds: list[EmbedRecord]
+    answer: str | None = None
+
+
 @client.tree.command(description="Ask for documents related to your question")
 @app_commands.describe(use_llm="Whether to generate an answer using an LLM")
 @app_commands.describe(category="The category this question is about")
@@ -163,6 +188,7 @@ async def ask(
     retrieval_time = end - start
     print(f"Retrieval: {retrieval_time}s")
 
+    embed_records: list[EmbedRecord] = []
     embeds: list[discord.Embed] = []
     files: list[discord.File] = []
     new_images = False
@@ -185,6 +211,8 @@ async def ask(
         ext = doc_name[doc_name.rindex(".") :] if "." in doc_name else doc_name
         ext = ext.lower()
 
+        image_path = None
+
         if ext == ".pdf":
             # Page numbers start at 0 internally, but 1 in links
             page = int(doc.metadata["page"]) + 1  # type: ignore[reportUnknownMemberType]
@@ -195,10 +223,10 @@ async def ask(
 
             res = pdf_image(source, doc)
             if res is not None:
-                image_url, in_cache = res
+                image_path, in_cache = res
                 new_images |= not in_cache
 
-                file = discord.File(image_url)
+                file = discord.File(image_path)
                 files.append(file)
                 embed = discord.Embed(title=title, url=url).set_image(
                     url=f"attachment://{file.filename}"
@@ -211,6 +239,11 @@ async def ask(
 
             url = get_click_url(dest_url, post_id, i).geturl()
             embed = discord.Embed(title=title, url=url, description=desc)
+
+        image_path_str = str(image_path) if image_path is not None else None
+        embed_records.append(
+            EmbedRecord(title, desc, dest_url.geturl(), score, image_path_str)
+        )
 
         embeds.append(embed)
 
@@ -229,6 +262,7 @@ async def ask(
 
     # Don't continue if we're not generating the answer with an LLM
     generation_time = None
+    answer = None
     if use_llm:
         # Send a message to mark that we're generating the answer
         msg = await interaction.followup.send("Generating answer...", wait=True)
@@ -258,15 +292,22 @@ async def ask(
         generation_time = end - start
         print(f"Generation: {generation_time}s")
 
+        # We have the full answer now
+        answer = line
+
         llm_review = ReviewButtonView(PostType.LLM, post_id)
 
         # Just in case last necessary edit didn't go through due to timeout
         # Also take the time to add a review button
-        msg = await msg.edit(content=line, view=llm_review)
+        msg = await msg.edit(content=answer, view=llm_review)
 
     log_post_times(post_id, retrieval_time, generation_time)
 
     # TODO: Save content of post and LLM response somewhere
+    record = AskRecord(post_id, embed_records, answer)
+    with (RECORDS_DIR / f"post_{post_id}.json").open("w") as f:
+        s = record.to_json(indent=2)  # type: ignore[reportUnknownMemberType]
+        _ = f.write(s)
 
 
 @client.tree.command(
@@ -342,10 +383,4 @@ async def on_command_error(_: commands.Context, error: Exception):  # type: igno
         print("Unknown error:", error)
 
 
-if __name__ == "__main__":
-    DocGroup.check_members()
-
-    # Load the docment -> image translations from memory
-    load_image_cache()
-
-    client.run(DISCORD_TOKEN)
+client.run(DISCORD_TOKEN)

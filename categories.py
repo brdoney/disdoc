@@ -59,3 +59,6 @@ class DocGroup(Enum):
 
 EXERCISES: set[DocGroup] = {g for g in DocGroup if re.match(r"ex\d", str(g))}
 PROJECTS: set[DocGroup] = {g for g in DocGroup if re.match(r"p\d", str(g))}
+
+# Check that our members are up to date on import
+DocGroup.check_members()
