@@ -8,6 +8,9 @@ from env_var import SQLITE_DB
 db = sqlite3.connect(SQLITE_DB)
 cur = db.cursor()
 
+# Enforce foreign key constraints
+_ = cur.execute("PRAGMA foreign_keys = ON")
+
 
 @overload
 def convert_consent(consent: bool) -> str: ...
