@@ -7,10 +7,10 @@ from langchain.embeddings.base import Embeddings
 from langchain.vectorstores import Chroma
 
 # Chroma settings, used in client
-CHROMA_SETTINGS = chromadb.config.Settings(
+_CHROMA_SETTINGS = chromadb.config.Settings(
     persist_directory=PERSIST_DIRECTORY, anonymized_telemetry=False
 )
-COLLECTION_NAME = "docs"
+_COLLECTION_NAME = "docs"
 
 
 def create_embeddings(show_progress_bar: bool = False) -> Embeddings:
@@ -24,18 +24,24 @@ def create_embeddings(show_progress_bar: bool = False) -> Embeddings:
     )
 
 
-def create_chroma_client():
+def create_chroma_client() -> chromadb.api.API:
     """Create an instance of the Chroma client we use."""
-    return chromadb.PersistentClient(settings=CHROMA_SETTINGS, path=PERSIST_DIRECTORY)
+    return chromadb.PersistentClient(settings=_CHROMA_SETTINGS, path=PERSIST_DIRECTORY)
 
 
-def create_chroma_collection(client: chromadb.api.API, embeddings: Embeddings):
+def create_chroma_collection(
+    client: chromadb.api.API, embeddings: Embeddings
+) -> Chroma:
     """Create an instance of the Chroma collection we use."""
-    return Chroma(
-        collection_name=COLLECTION_NAME,
+    collection = Chroma(
+        collection_name=_COLLECTION_NAME,
         persist_directory=PERSIST_DIRECTORY,
         embedding_function=embeddings,
-        client_settings=CHROMA_SETTINGS,
+        client_settings=_CHROMA_SETTINGS,
         client=client,
         collection_metadata={"hnsw:space": SIMILARITY_METRIC},
     )
+    print("Warming up chroma...")
+    _ = collection.similarity_search("Dummy query to warm up")
+    print("Done warming up")
+    return collection
