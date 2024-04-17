@@ -21,7 +21,7 @@ from env_var import (
 from llm import LLMType
 from pdf_images import load_image_cache, pdf_image, save_image_cache
 from reviews import PostType, ReviewButtonView
-from sqlite_db import check_consent, log_post
+from sqlite_db import check_consent, log_post, log_post_times
 
 with open(MAPPINGS_PATH) as f:
     NAME_TO_URL: dict[str, str] = json.load(f)
@@ -150,21 +150,18 @@ async def ask(
         return
 
     # Log post in DB
-    post_id = log_post(interaction.id, user, use_llm)
+    post_id = log_post(interaction.id, user, use_llm, llm_type)
 
     # Defer b/c loading vector DB from scratch takes longer than discord's response timeout
     await interaction.response.defer(thinking=True)
 
     start = timer()
-    # docs = await docs_db.asimilarity_search_with_relevance_scores(
-    #     question, filter=category.get_filter()
-    # )
     docs = await docs_db.asimilarity_search_with_relevance_scores(
         question, filter=category.get_filter()
     )
-    # docs = await db.amax_marginal_relevance_search(question)
     end = timer()
-    print(f"Retrieval: {end - start}s")
+    retrieval_time = end - start
+    print(f"Retrieval: {retrieval_time}s")
 
     embeds: list[discord.Embed] = []
     files: list[discord.File] = []
@@ -231,6 +228,7 @@ async def ask(
     )
 
     # Don't continue if we're not generating the answer with an LLM
+    generation_time = None
     if use_llm:
         # Send a message to mark that we're generating the answer
         msg = await interaction.followup.send("Generating answer...", wait=True)
@@ -240,6 +238,7 @@ async def ask(
         # before = timer()
         line = None
 
+        start = timer()
         # The Discord edit usually throttles after 3-4 llama.cpp tokens (with delays as high as 2s)
         async for line in llm_type(question, docs):
             curr_time = timer()
@@ -255,12 +254,17 @@ async def ask(
             # after = timer()
             # print(f"edit: {after - before}")
             # before = timer()
+        end = timer()
+        generation_time = end - start
+        print(f"Generation: {generation_time}s")
 
         llm_review = ReviewButtonView(PostType.LLM, post_id)
 
         # Just in case last necessary edit didn't go through due to timeout
         # Also take the time to add a review button
         msg = await msg.edit(content=line, view=llm_review)
+
+    log_post_times(post_id, retrieval_time, generation_time)
 
     # TODO: Save content of post and LLM response somewhere
 

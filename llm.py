@@ -46,7 +46,6 @@ async def llama(
     leftover: str = ""  # Buffer for partially read lines
     content: str = ""
     async with aiohttp.ClientSession() as session:
-        start = timer()
         async with session.post(
             f"{LLAMA_API_URL}/completion", json=params, headers=headers
         ) as resp:
@@ -110,9 +109,6 @@ async def llama(
                 if not cont:
                     break
 
-        end = timer()
-        print(f"Generation: {end - start}s")
-
 
 client = AsyncOpenAI()
 
@@ -120,7 +116,6 @@ client = AsyncOpenAI()
 async def openai(
     question: str, context_docs: list[tuple[Document, float]]
 ) -> AsyncIterable[str]:
-    start = timer()
     stream = await client.chat.completions.create(
         stream=True,
         messages=[{"role": "user", "content": _get_prompt(question, context_docs)}],
@@ -136,9 +131,6 @@ async def openai(
         else:
             content += new_content
             yield content
-
-    end = timer()
-    print(f"Generation: {end - start}s")
 
 
 async def mock(*_) -> AsyncIterable[str]:
