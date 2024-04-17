@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 from timeit import default_timer as timer
 from typing import Any  # type: ignore[reportAny]
-from urllib.parse import ParseResult, parse_qsl, urlencode, urlparse, urlunparse
+from urllib.parse import ParseResult, parse_qsl, urlencode, urlparse
 
 import discord
 from discord import app_commands
@@ -12,6 +12,7 @@ from typing_extensions import override
 from categories import DocGroup
 from chroma import create_chroma_client, create_chroma_collection, create_embeddings
 from env_var import (
+    CLICK_URL,
     CONSENT_URL,
     DISCORD_TOKEN,
     MAPPINGS_PATH,
@@ -122,6 +123,13 @@ def remove_group(path: Path) -> Path:
     return Path(*after_group)
 
 
+def get_click_url(dest: ParseResult, post_id: int, rec_id: int) -> ParseResult:
+    # Add rec_id to prevent duplicate links (separate snippets in the same file) from grouping together
+    return add_query_params(
+        CLICK_URL, {"postid": post_id, "to": dest.geturl(), "rec_id": rec_id}
+    )
+
+
 @client.tree.command(description="Ask for documents related to your question")
 @app_commands.describe(use_llm="Whether to generate an answer using an LLM")
 @app_commands.describe(category="The category this question is about")
@@ -164,11 +172,10 @@ async def ask(
     for i, (doc, score) in enumerate(docs):
         source = Path(doc.metadata["source"])  # type: ignore[reportUnknownMemberType]
 
-        url_str = NAME_TO_URL[str(remove_group(source))]
-        # Add rec_id to prevent duplicate links (separate snippets in the same file) from grouping together
-        url = add_query_params(urlparse(url_str), {"rec_id": i})
+        dest_url_str = NAME_TO_URL[str(remove_group(source))]
+        dest_url = urlparse(dest_url_str)
 
-        doc_name = url.path.split("/")[-1]
+        doc_name = dest_url.path.split("/")[-1]
         # Note: score is only accurate if we're using cosine as our similarity metric
         title = f"{score:.2%} {doc_name}"
         # title = f"{doc_name}"
@@ -184,8 +191,10 @@ async def ask(
         if ext == ".pdf":
             # Page numbers start at 0 internally, but 1 in links
             page = int(doc.metadata["page"]) + 1  # type: ignore[reportUnknownMemberType]
-            url = url._replace(fragment=f"page={page}")
+            dest_url = dest_url._replace(fragment=f"page={page}")
             title += f" - page {page}"
+
+            url = get_click_url(dest_url, post_id, i).geturl()
 
             res = pdf_image(source, doc)
             if res is not None:
@@ -194,16 +203,17 @@ async def ask(
 
                 file = discord.File(image_url)
                 files.append(file)
-                embed = discord.Embed(title=title, url=url.geturl()).set_image(
+                embed = discord.Embed(title=title, url=url).set_image(
                     url=f"attachment://{file.filename}"
                 )
             else:
-                embed = discord.Embed(title=title, url=url.geturl(), description=desc)
+                embed = discord.Embed(title=title, url=url, description=desc)
         else:
             if ext in SOURCE_CODE_EXT:
                 desc = f"```{SOURCE_CODE_EXT[ext]}\n{desc}\n```"
 
-            embed = discord.Embed(title=title, url=url.geturl(), description=desc)
+            url = get_click_url(dest_url, post_id, i).geturl()
+            embed = discord.Embed(title=title, url=url, description=desc)
 
         embeds.append(embed)
 
@@ -270,7 +280,7 @@ async def consent(interaction: discord.Interaction) -> None:
         "discordNick": user.display_name,
     }
     new_url = add_query_params(new_url, params)
-    url = urlunparse(new_url)
+    url = new_url.geturl()
 
     await interaction.response.send_message(
         embed=discord.Embed(

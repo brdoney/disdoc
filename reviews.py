@@ -207,7 +207,9 @@ class ReviewButtonView(discord.ui.View):
     def __init__(self, post_type: PostType, post_id: int):
         super().__init__()
         self.post_type = post_type
+        """What kind of post this button view is attached to"""
         self.post_id = post_id
+        """DB ID for the post this is attached to"""
 
     @discord.ui.button(label="Start Review", style=discord.ButtonStyle.primary)
     async def start_review(

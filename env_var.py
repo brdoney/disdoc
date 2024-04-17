@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 
@@ -39,3 +40,4 @@ SIMILARITY_METRIC = load_env("SIMILARITY_METRIC", choices=["cosine", "l2", "ip"]
 SQLITE_DB = load_env("SQLITE_DB")
 CONSENT_URL = load_env("CONSENT_URL")
 LLAMA_API_URL = load_env("LLAMA_API_URL")
+CLICK_URL = urlparse(load_env("CLICK_URL"))
