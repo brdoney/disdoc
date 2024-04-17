@@ -1,4 +1,3 @@
-import sqlite3
 from abc import ABC, abstractmethod
 from enum import Enum, auto
 
@@ -6,7 +5,7 @@ import discord
 from discord import SelectOption
 from typing_extensions import Self, override
 
-from consent import check_consent
+from sqlite_db import UserInfo, check_consent, log_llm_review, log_retrieval_review
 
 
 class PostType(Enum):
@@ -40,13 +39,17 @@ _RELEVANCE_OPTIONS = [
 
 
 class ReviewView(discord.ui.View, ABC):
+    def __init__(self, user: UserInfo):
+        super().__init__()
+        self.user = user
+
     @abstractmethod
     def is_review_complete(self) -> bool:
         """Whether the current review is complete. Called to perform form validation."""
         raise NotImplementedError()
 
     @abstractmethod
-    def log_review(self) -> None:
+    def log_review(self, user: UserInfo) -> None:
         """Log the results of the review. Called when view is complete."""
         raise NotImplementedError()
 
@@ -60,7 +63,8 @@ class ReviewView(discord.ui.View, ABC):
             await interaction.response.edit_message(
                 content="Review Complete!", view=self
             )
-            self.log_review()
+            if self.user.consent:
+                self.log_review(self.user)
         else:
             # Mark the form as incomplete
             await interaction.response.edit_message(
@@ -70,8 +74,8 @@ class ReviewView(discord.ui.View, ABC):
 
 
 class RetrievalReviewView(ReviewView):
-    def __init__(self, post_id: str):
-        super().__init__()
+    def __init__(self, post_id: int, user: UserInfo):
+        super().__init__(user)
         # The ID of the post that this is originally for
         self.post_id = post_id
         self.helpfulness: int | None = None
@@ -82,9 +86,14 @@ class RetrievalReviewView(ReviewView):
         return all(val is not None for val in (self.relevance, self.helpfulness))
 
     @override
-    def log_review(self) -> None:
-        print(
-            f"Logging review for {self.post_id}: {self.helpfulness} helpfulness, {self.relevance} relevance"
+    def log_review(self, user: UserInfo) -> None:
+        if not self.is_review_complete():
+            raise RuntimeError("Trying to log unfinished retrieval review")
+        log_retrieval_review(
+            self.post_id,
+            user,
+            self.relevance,  # type: ignore[reportArgumentType]
+            self.helpfulness,  # type: ignore[reportArgumentType]
         )
 
     @discord.ui.select(
@@ -121,8 +130,8 @@ class RetrievalReviewView(ReviewView):
 
 
 class LLMReviewView(ReviewView):
-    def __init__(self, post_id: str):
-        super().__init__()
+    def __init__(self, post_id: int, user: UserInfo):
+        super().__init__(user)
         # The ID of the post that this is originally for
         self.post_id = post_id
         self.helpfulness: int | None = None
@@ -137,9 +146,15 @@ class LLMReviewView(ReviewView):
         )
 
     @override
-    def log_review(self) -> None:
-        print(
-            f"Logging review for {self.post_id}: {self.helpfulness} helpfulness, {self.relevance} relevance, {self.correctness} correctness"
+    def log_review(self, user: UserInfo) -> None:
+        if not self.is_review_complete():
+            raise RuntimeError("Trying to log unfinished LLM review")
+        log_llm_review(
+            self.post_id,
+            user,
+            self.relevance,  # type: ignore[reportArgumentType]
+            self.helpfulness,  # type: ignore[reportArgumentType]
+            self.correctness,  # type: ignore[reportArgumentType]
         )
 
     @discord.ui.select(
@@ -189,21 +204,17 @@ class LLMReviewView(ReviewView):
 
 
 class ReviewButtonView(discord.ui.View):
-    def __init__(
-        self, post_type: PostType, post_id: str, sqlite_cursor: sqlite3.Cursor
-    ):
+    def __init__(self, post_type: PostType, post_id: int):
         super().__init__()
         self.post_type = post_type
-        # Interaction for buttons will be different than our original thread's
-        # so we need to save the original one for logging purposes
         self.post_id = post_id
-        self.sqlite_cursor = sqlite_cursor
 
     @discord.ui.button(label="Start Review", style=discord.ButtonStyle.primary)
     async def start_review(
         self, interaction: discord.Interaction, _: discord.ui.Button[Self]
     ):
-        if check_consent(self.sqlite_cursor, interaction.user.id) is None:
+        user = check_consent(interaction.user.id)
+        if user is None:
             await interaction.response.send_message(
                 "You have not indicated your consent status. "
                 + "Please do so with the `/consent` command before using any other commands.",
@@ -212,13 +223,12 @@ class ReviewButtonView(discord.ui.View):
             return
 
         if self.post_type is PostType.RETRIEVAL:
-            view = RetrievalReviewView(self.post_id)
+            view = RetrievalReviewView(self.post_id, user)
         elif self.post_type is PostType.LLM:
-            view = LLMReviewView(self.post_id)
+            view = LLMReviewView(self.post_id, user)
         else:
             raise ValueError(f"Unsupported PostType {self.post_type}")
 
-        # TODO: Create review view for the clicked post and send it
         await interaction.response.send_message(
             "Review in progress...", view=view, ephemeral=True
         )

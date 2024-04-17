@@ -1,5 +1,4 @@
 import json
-import sqlite3
 from pathlib import Path
 from timeit import default_timer as timer
 from typing import Any  # type: ignore[reportAny]
@@ -12,17 +11,16 @@ from typing_extensions import override
 
 from categories import DocGroup
 from chroma import create_chroma_client, create_chroma_collection, create_embeddings
-from consent import check_consent
 from env_var import (
     CONSENT_URL,
     DISCORD_TOKEN,
     MAPPINGS_PATH,
     SOURCE_DIRECTORY,
-    SQLITE_DB,
 )
 from llm import LLMType
 from pdf_images import load_image_cache, pdf_image, save_image_cache
 from reviews import PostType, ReviewButtonView
+from sqlite_db import check_consent, log_post
 
 with open(MAPPINGS_PATH) as f:
     NAME_TO_URL: dict[str, str] = json.load(f)
@@ -31,10 +29,8 @@ embeddings = create_embeddings()
 chroma_client = create_chroma_client()
 docs_db = create_chroma_collection(chroma_client, embeddings)
 
-sqlite_cursor = sqlite3.connect(SQLITE_DB).cursor()
-
-intents = discord.Intents.default()
-intents.message_content = True
+_intents = discord.Intents.default()
+_intents.message_content = True
 
 
 edit_timer = 0.3
@@ -45,8 +41,8 @@ llm_type: LLMType = LLMType.MOCK
 
 
 class MyClient(discord.Client):
-    def __init__(self, *, intents: discord.Intents):
-        super().__init__(intents=intents)
+    def __init__(self, *, intents: discord.Intents, activity: discord.Activity):
+        super().__init__(intents=intents, activity=activity)
         self.tree = app_commands.CommandTree(self)
 
     @override
@@ -55,7 +51,8 @@ class MyClient(discord.Client):
         print(f"Synced {len(synced)} command(s)")
 
 
-client = MyClient(intents=intents)
+_activity = discord.Activity(type=discord.ActivityType.playing, name="/ask")
+client = MyClient(intents=_intents, activity=_activity)
 
 
 @client.event
@@ -69,7 +66,7 @@ async def on_ready():
 
 
 SOURCE_CODE_EXT = {
-    # .html not used b/c it's useless
+    # .html not used b/c we show page's raw text content
     # .pdf not used b/c we generate images
     ".output": "text",
     ".java": "java",
@@ -135,13 +132,17 @@ async def ask(
     category: DocGroup,
     question: str,
 ):
-    if check_consent(sqlite_cursor, interaction.user.id) is None:
+    user = check_consent(interaction.user.id)
+    if user is None:
         await interaction.response.send_message(
             "You have not indicated your consent status. "
             + "Please do so with the `/consent` command before using any other commands.",
             ephemeral=True,
         )
         return
+
+    # Log post in DB
+    post_id = log_post(interaction.id, user, use_llm)
 
     # Defer b/c loading vector DB from scratch takes longer than discord's response timeout
     await interaction.response.defer(thinking=True)
@@ -209,9 +210,7 @@ async def ask(
     if new_images:
         save_image_cache()
 
-    retrieval_review = ReviewButtonView(
-        PostType.RETRIEVAL, str(interaction.id), sqlite_cursor
-    )
+    retrieval_review = ReviewButtonView(PostType.RETRIEVAL, post_id)
 
     # We use followup since we deferred earlier
     await interaction.followup.send(
@@ -222,38 +221,38 @@ async def ask(
     )
 
     # Don't continue if we're not generating the answer with an LLM
-    if not use_llm:
-        return
+    if use_llm:
+        # Send a message to mark that we're generating the answer
+        msg = await interaction.followup.send("Generating answer...", wait=True)
 
-    # Send a message to mark that we're generating the answer
-    msg = await interaction.followup.send("Generating answer...", wait=True)
-
-    start = timer()
-    elapsed = 0
-    # before = timer()
-    line = None
-
-    # The Discord edit usually throttles after 3-4 llama.cpp tokens (with delays as high as 2s)
-    async for line in llm_type(question, docs):
-        curr_time = timer()
-        elapsed = curr_time - start
-        if elapsed < edit_timer:
-            continue
-        start = curr_time
-
-        # after = timer()
-        # print(f"llama.cpp token: {after - before}")
+        start = timer()
+        elapsed = 0
         # before = timer()
-        msg = await msg.edit(content=line)
-        # after = timer()
-        # print(f"edit: {after - before}")
-        # before = timer()
+        line = None
 
-    llm_review = ReviewButtonView(PostType.LLM, str(interaction.id), sqlite_cursor)
+        # The Discord edit usually throttles after 3-4 llama.cpp tokens (with delays as high as 2s)
+        async for line in llm_type(question, docs):
+            curr_time = timer()
+            elapsed = curr_time - start
+            if elapsed < edit_timer:
+                continue
+            start = curr_time
 
-    # Just in case last necessary edit didn't go through due to timeout
-    # Also take the time to add a review button
-    msg = await msg.edit(content=line, view=llm_review)
+            # after = timer()
+            # print(f"llama.cpp token: {after - before}")
+            # before = timer()
+            msg = await msg.edit(content=line)
+            # after = timer()
+            # print(f"edit: {after - before}")
+            # before = timer()
+
+        llm_review = ReviewButtonView(PostType.LLM, post_id)
+
+        # Just in case last necessary edit didn't go through due to timeout
+        # Also take the time to add a review button
+        msg = await msg.edit(content=line, view=llm_review)
+
+    # TODO: Save content of post and LLM response somewhere
 
 
 @client.tree.command(
