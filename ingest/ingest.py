@@ -113,6 +113,11 @@ def load_documents(
 
     pprint.pp(files)
 
+    confirm = input("Do files look good? [Y/n]").lower()
+    if confirm == "n":
+        print("Exiting")
+        exit(0)
+
     print(f"Loading {len(files)} new documents from {source_dir}")
 
     # Leave one CPU for this process
