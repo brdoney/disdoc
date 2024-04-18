@@ -14,27 +14,27 @@ class ReviewType(Enum):
 
 
 _HELPFULNESS_OPTIONS = [
-    SelectOption(label="Very unhelpful", value="-2"),
-    SelectOption(label="Slightly unhelpful", value="-1"),
-    SelectOption(label="Neutral", value="0"),
-    SelectOption(label="Slightly helpful", value="1"),
     SelectOption(label="Very helpful", value="2"),
+    SelectOption(label="Slightly helpful", value="1"),
+    SelectOption(label="Neutral", value="0"),
+    SelectOption(label="Slightly unhelpful", value="-1"),
+    SelectOption(label="Very unhelpful", value="-2"),
 ]
 _CORRECTNESS_OPTIONS = [
-    SelectOption(label="Completely incorrect", value="-3"),
-    SelectOption(label="Mostly incorrect", value="-2"),
-    SelectOption(label="Slightly incorrect", value="-1"),
-    SelectOption(label="Neutral", value="0"),
-    SelectOption(label="Slightly correct", value="1"),
+    SelectOption(label="Completely correct", value="3"),
     SelectOption(label="Mostly correct", value="2"),
-    SelectOption(label="Completely correc", value="3"),
+    SelectOption(label="Slightly correct", value="1"),
+    SelectOption(label="Neutral", value="0"),
+    SelectOption(label="Slightly incorrect", value="-1"),
+    SelectOption(label="Mostly incorrect", value="-2"),
+    SelectOption(label="Completely incorrect", value="-3"),
 ]
 _RELEVANCE_OPTIONS = [
-    SelectOption(label="Highly irrelevant", value="-2"),
-    SelectOption(label="Slightly irrelevant", value="-1"),
-    SelectOption(label="Neutral", value="0"),
-    SelectOption(label="Slightly relevant", value="1"),
     SelectOption(label="Highly relevant", value="2"),
+    SelectOption(label="Slightly relevant", value="1"),
+    SelectOption(label="Neutral", value="0"),
+    SelectOption(label="Slightly irrelevant", value="-1"),
+    SelectOption(label="Highly irrelevant", value="-2"),
 ]
 
 
@@ -230,5 +230,7 @@ class ReviewButtonView(discord.ui.View):
             raise ValueError(f"Unsupported PostType {self.post_type}")
 
         await interaction.response.send_message(
-            "Review in progress...", view=view, ephemeral=True
+            "Please answer the following questions **according to your opinion**",
+            view=view,
+            ephemeral=True,
         )
