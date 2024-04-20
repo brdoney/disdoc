@@ -119,25 +119,28 @@ class AskRequest(DataClassJsonMixin):
 
 
 @app.post("/ask")
-def ask():
+def accept_ask():
     j: dict[str, Any] = request.get_json(False)
     try:
         req: AskRequest = AskRequest.schema().from_dict(j)  # type: ignore[reportUnknownMemberType]
         category = DocGroup.from_str(req.category)
         question = req.question
+        return ask(question, category)
     except ValidationError as e:
         return str(e), 400
 
+
+def ask(question: str, category: DocGroup):
     # Log post in DB
     post_id = uuid.uuid4()
 
-    # start = timer()
+    start = timer()
     docs = docs_db.similarity_search_with_relevance_scores(
         question, filter=category.get_filter()
     )
-    # end = timer()
-    # retrieval_time = end - start
-    # print(f"Retrieval: {retrieval_time}s")
+    end = timer()
+    retrieval_time = end - start
+    print(f"Retrieval: {retrieval_time}s")
 
     embed_records: list[EmbedRecord] = []
     new_images = False
