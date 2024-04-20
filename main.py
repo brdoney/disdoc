@@ -4,33 +4,25 @@ from pathlib import Path
 from timeit import default_timer as timer
 from typing import Any  # type: ignore[reportAny]
 from urllib.parse import ParseResult, parse_qsl, urlencode, urlparse
+import uuid
 
 import discord
 from dataclasses_json import DataClassJsonMixin
 from discord import app_commands
-from discord.ext import commands
 from typing_extensions import override
 
 from categories import DocGroup
 from chroma import create_chroma_client, create_chroma_collection, create_embeddings
-from env_var import (
-    CLICK_URL,
-    CONSENT_URL,
-    DISCORD_TOKEN,
-    MAPPINGS_PATH,
-    SOURCE_DIRECTORY,
-)
+from env_var import DISCORD_TOKEN, MAPPINGS_PATH, SOURCE_DIRECTORY
 from llm import LLMType
 from pdf_images import load_image_cache, pdf_image, save_image_cache
-from reviews import ReviewButtonView, ReviewType
-from sqlite_db import check_consent, log_post, log_post_times
 
 with open(MAPPINGS_PATH) as f:
     NAME_TO_URL: dict[str, str] = json.load(f)
 
 embeddings = create_embeddings()
 chroma_client = create_chroma_client()
-docs_db = create_chroma_collection(chroma_client, embeddings)
+docs_db = create_chroma_collection(chroma_client, embeddings, True)
 
 _intents = discord.Intents.default()
 _intents.message_content = True
@@ -132,13 +124,10 @@ def remove_group(path: Path) -> Path:
     return Path(*after_group)
 
 
-def get_click_url(dest: ParseResult, post_id: int | None, rec_id: int) -> ParseResult:
+def get_click_url(dest: ParseResult, rec_id: int) -> ParseResult:
     # Add rec_id to prevent duplicate links (separate snippets in the same file) from grouping together
-    params = {"to": dest.geturl(), "rec_id": rec_id}
-    if post_id is not None:
-        params["postid"] = post_id
-
-    return add_query_params(CLICK_URL, params)
+    params = {"rec_id": rec_id}
+    return add_query_params(dest, params)
 
 
 @dataclass
@@ -152,32 +141,20 @@ class EmbedRecord(DataClassJsonMixin):
 
 @dataclass
 class AskRecord(DataClassJsonMixin):
-    post_id: int
+    post_id: str
     embeds: list[EmbedRecord]
-    answer: str | None = None
 
 
 @client.tree.command(description="Ask for documents related to your question")
-@app_commands.describe(use_llm="Whether to generate an answer using an LLM")
 @app_commands.describe(category="The category this question is about")
 @app_commands.describe(question="Question or statement you're interested in")
 async def ask(
     interaction: discord.Interaction,
-    use_llm: bool,
     category: DocGroup,
     question: str,
 ):
-    user = check_consent(interaction.user.id)
-    if user is None:
-        await interaction.response.send_message(
-            "You have not indicated your consent status. "
-            + "Please do so with the `/consent` command before using any other commands.",
-            ephemeral=True,
-        )
-        return
-
     # Log post in DB
-    post_id = log_post(interaction.id, user, use_llm, llm_type)
+    post_id = uuid.uuid4()
 
     # Defer b/c loading vector DB from scratch takes longer than discord's response timeout
     await interaction.response.defer(thinking=True)
@@ -221,7 +198,7 @@ async def ask(
             dest_url = dest_url._replace(fragment=f"page={page}")
             title += f" - page {page}"
 
-            url = get_click_url(dest_url, post_id, i).geturl()
+            url = get_click_url(dest_url, i).geturl()
 
             res = pdf_image(source, doc)
             if res is not None:
@@ -239,7 +216,7 @@ async def ask(
             if ext in SOURCE_CODE_EXT:
                 desc = f"```{SOURCE_CODE_EXT[ext]}\n{desc}\n```"
 
-            url = get_click_url(dest_url, post_id, i).geturl()
+            url = get_click_url(dest_url, i).geturl()
             embed = discord.Embed(title=title, url=url, description=desc)
 
         image_path_str = str(image_path) if image_path is not None else None
@@ -252,139 +229,17 @@ async def ask(
     if new_images:
         save_image_cache()
 
-    retrieval_review = ReviewButtonView(ReviewType.RETRIEVAL, post_id)
-
     # We use followup since we deferred earlier
     await interaction.followup.send(
         f"> {question}",
         files=files,
         embeds=embeds,
-        view=retrieval_review,
     )
 
-    # Don't continue if we're not generating the answer with an LLM
-    generation_time = None
-    answer = None
-    if use_llm:
-        # Send a message to mark that we're generating the answer
-        msg = await interaction.followup.send("Generating answer...", wait=True)
-
-        start = timer()
-        elapsed = 0
-        # before = timer()
-        line = None
-
-        start = timer()
-        # The Discord edit usually throttles after 3-4 llama.cpp tokens (with delays as high as 2s)
-        async for line in llm_type(question, docs):
-            curr_time = timer()
-            elapsed = curr_time - start
-            if elapsed < edit_timer:
-                continue
-            start = curr_time
-
-            # after = timer()
-            # print(f"llama.cpp token: {after - before}")
-            # before = timer()
-            msg = await msg.edit(content=line)
-            # after = timer()
-            # print(f"edit: {after - before}")
-            # before = timer()
-        end = timer()
-        generation_time = end - start
-        print(f"Generation: {generation_time}s")
-
-        # We have the full answer now
-        answer = line
-
-        llm_review = ReviewButtonView(ReviewType.LLM, post_id)
-
-        # Just in case last necessary edit didn't go through due to timeout
-        # Also take the time to add a review button
-        msg = await msg.edit(content=answer, view=llm_review)
-
-    if post_id is not None:
-        # Only log info if we have a post on the books (i.e. consent was given)
-
-        log_post_times(post_id, retrieval_time, generation_time)
-
-        record = AskRecord(post_id, embed_records, answer)
-        with (RECORDS_DIR / f"post_{post_id}.json").open("w") as f:
-            s = record.to_json(indent=2)  # type: ignore[reportUnknownMemberType]
-            _ = f.write(s)
-
-
-@client.tree.command(
-    description="Generates a link you can use to indicate your consent status"
-)
-async def consent(interaction: discord.Interaction) -> None:
-    new_url = urlparse(CONSENT_URL)
-
-    # https://courses.cs.vt.edu/cs3214/test/consent.html?discordId=hello
-    user = interaction.user
-
-    params = {
-        "discordId": user.id,
-        "discordName": user.name,
-        "discordNick": user.display_name,
-    }
-    new_url = add_query_params(new_url, params)
-    url = new_url.geturl()
-
-    await interaction.response.send_message(
-        embed=discord.Embed(
-            title="Consent form",
-            description="Use this form to check and/or indicate your consent status",
-            url=url,
-        ),
-        ephemeral=True,
-    )
-
-
-@client.tree.command(description="Admin only: get or set the edit buffer")
-@app_commands.checks.has_permissions(administrator=True)
-async def editbuffer(interaction: discord.Interaction, new_timer: float | None = None):
-    global edit_timer
-    if new_timer is None:
-        await interaction.response.send_message(
-            f"Edit buffer is currently {edit_timer} seconds", ephemeral=True
-        )
-    else:
-        edit_timer = new_timer
-        await interaction.response.send_message(
-            f"Set edit buffer to {new_timer} seconds", ephemeral=True
-        )
-
-
-@client.tree.command(description="Admin only: get or set the LLM type")
-@app_commands.checks.has_permissions(administrator=True)
-async def llmtype(interaction: discord.Interaction, new_llm: LLMType | None = None):
-    global llm_type
-    if new_llm is None:
-        await interaction.response.send_message(
-            f"LLM type is currently {llm_type.name}", ephemeral=True
-        )
-    else:
-        llm_type = new_llm
-        await interaction.response.send_message(
-            f"Set LLM type to {new_llm.name}", ephemeral=True
-        )
-
-
-@client.tree.command(description="Admin only: shutdown the bot")
-@app_commands.checks.has_permissions(administrator=True)
-async def shutdown(interaction: discord.Interaction):
-    await interaction.response.send_message("Shutting down bot", ephemeral=True)
-    await interaction.client.close()
-    print("Shutdown bot")
-
-
-@client.event
-async def on_command_error(_: commands.Context, error: Exception):  # type: ignore[reportMissingTypeArgument]
-    if isinstance(error, discord.HTTPException):
-        print("Hit ratelimit:", error)
-    else:
-        print("Unknown error:", error)
+    record = AskRecord(str(post_id), embed_records)
+    with (RECORDS_DIR / f"post_{post_id}.json").open("w") as f:
+        s = record.to_json(indent=2)  # type: ignore[reportUnknownMemberType]
+        _ = f.write(s)
 
 
 client.run(DISCORD_TOKEN)

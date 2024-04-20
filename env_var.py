@@ -1,6 +1,5 @@
 import os
 from pathlib import Path
-from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 
@@ -35,9 +34,5 @@ SOURCE_DIRECTORY = Path(load_env("SOURCE_DIRECTORY", "source_documents"))
 PERSIST_DIRECTORY = load_env("PERSIST_DIRECTORY")
 DISCORD_TOKEN = load_env("DISCORD_TOKEN")
 EMBEDDINGS_MODEL_NAME = load_env("EMBEDDINGS_MODEL_NAME")
-MAPPINGS_PATH = load_env("MAPPINGS_PATH")
+MAPPINGS_PATH = Path(load_env("MAPPINGS_PATH")).resolve()
 SIMILARITY_METRIC = load_env("SIMILARITY_METRIC", choices=["cosine", "l2", "ip"])
-SQLITE_DB = load_env("SQLITE_DB")
-CONSENT_URL = load_env("CONSENT_URL")
-LLAMA_API_URL = load_env("LLAMA_API_URL")
-CLICK_URL = urlparse(load_env("CLICK_URL"))
