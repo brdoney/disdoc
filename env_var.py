@@ -32,7 +32,6 @@ if not load_dotenv():
 
 SOURCE_DIRECTORY = Path(load_env("SOURCE_DIRECTORY", "source_documents"))
 PERSIST_DIRECTORY = load_env("PERSIST_DIRECTORY")
-DISCORD_TOKEN = load_env("DISCORD_TOKEN")
 EMBEDDINGS_MODEL_NAME = load_env("EMBEDDINGS_MODEL_NAME")
 MAPPINGS_PATH = Path(load_env("MAPPINGS_PATH")).resolve()
 SIMILARITY_METRIC = load_env("SIMILARITY_METRIC", choices=["cosine", "l2", "ip"])

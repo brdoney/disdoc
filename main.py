@@ -6,16 +6,15 @@ from typing import Any  # type: ignore[reportAny]
 from urllib.parse import ParseResult, parse_qsl, urlencode, urlparse
 import uuid
 
-import discord
 from dataclasses_json import DataClassJsonMixin
-from discord import app_commands
-from typing_extensions import override
+from marshmallow import ValidationError
 
 from categories import DocGroup
 from chroma import create_chroma_client, create_chroma_collection, create_embeddings
-from env_var import DISCORD_TOKEN, MAPPINGS_PATH, SOURCE_DIRECTORY
+from env_var import MAPPINGS_PATH, SOURCE_DIRECTORY
 from llm import LLMType
 from pdf_images import load_image_cache, pdf_image, save_image_cache
+from flask import Flask, request
 
 with open(MAPPINGS_PATH) as f:
     NAME_TO_URL: dict[str, str] = json.load(f)
@@ -23,10 +22,6 @@ with open(MAPPINGS_PATH) as f:
 embeddings = create_embeddings()
 chroma_client = create_chroma_client()
 docs_db = create_chroma_collection(chroma_client, embeddings, True)
-
-_intents = discord.Intents.default()
-_intents.message_content = True
-_activity = discord.Activity(type=discord.ActivityType.playing, name="/ask")
 
 RECORDS_DIR = Path("./records").resolve()
 """Directory to store records of posts in"""
@@ -42,30 +37,7 @@ llm_type: LLMType = LLMType.MOCK
 # Load the docment -> image translations from memory
 load_image_cache()
 
-
-class MyClient(discord.Client):
-    def __init__(self, *, intents: discord.Intents, activity: discord.Activity):
-        super().__init__(intents=intents, activity=activity)
-        self.tree = app_commands.CommandTree(self)
-
-    @override
-    async def setup_hook(self):
-        synced = await self.tree.sync()
-        print(f"Synced {len(synced)} command(s)")
-
-
-client = MyClient(intents=_intents, activity=_activity)
-
-
-@client.event
-async def on_ready():
-    print("Running bot!")
-    if client.user is None:
-        print("Not logged in. An error must have occurred")
-    else:
-        print(f"Logged in as {client.user} (ID: {client.user.id})")
-    print("------")
-
+app = Flask(__name__)
 
 SOURCE_CODE_EXT = {
     # .html not used b/c we show page's raw text content
@@ -142,34 +114,39 @@ class EmbedRecord(DataClassJsonMixin):
 @dataclass
 class AskRecord(DataClassJsonMixin):
     post_id: str
+    question: str
+    category: str
     embeds: list[EmbedRecord]
 
 
-@client.tree.command(description="Ask for documents related to your question")
-@app_commands.describe(category="The category this question is about")
-@app_commands.describe(question="Question or statement you're interested in")
-async def ask(
-    interaction: discord.Interaction,
-    category: DocGroup,
-    question: str,
-):
+@dataclass
+class AskRequest(DataClassJsonMixin):
+    question: str
+    category: str
+
+
+@app.post("/ask")
+def ask():
+    j: dict[str, Any] = request.get_json(False)
+    try:
+        req: AskRequest = AskRequest.schema().from_dict(j)  # type: ignore[reportUnknownMemberType]
+        category = DocGroup.from_str(req.category)
+        question = req.question
+    except ValidationError as e:
+        return str(e), 400
+
     # Log post in DB
     post_id = uuid.uuid4()
 
-    # Defer b/c loading vector DB from scratch takes longer than discord's response timeout
-    await interaction.response.defer(thinking=True)
-
-    start = timer()
-    docs = await docs_db.asimilarity_search_with_relevance_scores(
+    # start = timer()
+    docs = docs_db.similarity_search_with_relevance_scores(
         question, filter=category.get_filter()
     )
-    end = timer()
-    retrieval_time = end - start
-    print(f"Retrieval: {retrieval_time}s")
+    # end = timer()
+    # retrieval_time = end - start
+    # print(f"Retrieval: {retrieval_time}s")
 
     embed_records: list[EmbedRecord] = []
-    embeds: list[discord.Embed] = []
-    files: list[discord.File] = []
     new_images = False
     for i, (doc, score) in enumerate(docs):
         source = Path(doc.metadata["source"])  # type: ignore[reportUnknownMemberType]
@@ -204,42 +181,30 @@ async def ask(
             if res is not None:
                 image_path, in_cache = res
                 new_images |= not in_cache
-
-                file = discord.File(image_path)
-                files.append(file)
-                embed = discord.Embed(title=title, url=url).set_image(
-                    url=f"attachment://{file.filename}"
-                )
-            else:
-                embed = discord.Embed(title=title, url=url, description=desc)
         else:
             if ext in SOURCE_CODE_EXT:
                 desc = f"```{SOURCE_CODE_EXT[ext]}\n{desc}\n```"
 
             url = get_click_url(dest_url, i).geturl()
-            embed = discord.Embed(title=title, url=url, description=desc)
 
         image_path_str = str(image_path) if image_path is not None else None
-        embed_records.append(
-            EmbedRecord(title, desc, dest_url.geturl(), score, image_path_str)
-        )
-
-        embeds.append(embed)
+        embed_records.append(EmbedRecord(title, desc, url, score, image_path_str))
 
     if new_images:
         save_image_cache()
 
-    # We use followup since we deferred earlier
-    await interaction.followup.send(
-        f"> {question}",
-        files=files,
-        embeds=embeds,
-    )
-
-    record = AskRecord(str(post_id), embed_records)
+    record = AskRecord(str(post_id), question, category.name, embed_records)
     with (RECORDS_DIR / f"post_{post_id}.json").open("w") as f:
         s = record.to_json(indent=2)  # type: ignore[reportUnknownMemberType]
         _ = f.write(s)
 
+    return record.to_json(), 200  # type: ignore[reportUnknownMemberType]
 
-client.run(DISCORD_TOKEN)
+
+@app.get("/ping")
+def pong():
+    return "pong", 200
+
+
+if __name__ == "__main__":
+    app.run()

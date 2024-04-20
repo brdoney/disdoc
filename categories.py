@@ -56,6 +56,12 @@ class DocGroup(Enum):
         else:
             return {"group": str(self)}
 
+    @staticmethod
+    def from_str(s: str) -> "DocGroup":
+        if s not in DocGroup.__members__:
+            raise ValueError(f"Invalid category {s}")
+        return DocGroup[s.lower()]
+
 
 EXERCISES: set[DocGroup] = {g for g in DocGroup if re.match(r"ex\d", str(g))}
 PROJECTS: set[DocGroup] = {g for g in DocGroup if re.match(r"p\d", str(g))}
