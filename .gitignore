@@ -172,3 +172,6 @@ db/
 source_documents/
 records/
 blacklist.txt
+
+# Extensibility final project
+results/

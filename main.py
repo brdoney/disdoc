@@ -12,7 +12,6 @@ from marshmallow import ValidationError
 from categories import DocGroup
 from chroma import create_chroma_client, create_chroma_collection, create_embeddings
 from env_var import MAPPINGS_PATH, SOURCE_DIRECTORY
-from llm import LLMType
 from pdf_images import load_image_cache, pdf_image, save_image_cache
 from flask import Flask, request
 
@@ -27,12 +26,6 @@ RECORDS_DIR = Path("./records").resolve()
 """Directory to store records of posts in"""
 # Make the records directory if it doesn't exist already
 RECORDS_DIR.mkdir(exist_ok=True)
-
-edit_timer = 0.3
-"""Number of tokens to buffer before editing a message. Theoretically, `1/5=0.2` is the minimum value."""
-
-llm_type: LLMType = LLMType.MOCK
-"""The LLM we're using"""
 
 # Load the docment -> image translations from memory
 load_image_cache()
