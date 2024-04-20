@@ -3,10 +3,11 @@ import re
 from typing import Any  # type: ignore[reportAny]
 
 from env_var import SOURCE_DIRECTORY
-from typing_extensions import override
+from typing_extensions import Self, override
 
 
 class DocGroup(Enum):
+    all = auto()
     ex0 = auto()
     ex1 = auto()
     ex2 = auto()
@@ -32,11 +33,12 @@ class DocGroup(Enum):
         return f"{self.name}"
 
     @classmethod
-    def check_members(cls):
+    def check_members(cls: type[Self]) -> None:
         exp_groups: set[str] = set()
         for group_dir in SOURCE_DIRECTORY.iterdir():
             group = group_dir.relative_to(SOURCE_DIRECTORY).parts[0]
             exp_groups.add(group)
+        exp_groups.add("all")
 
         found_groups = set(str(member) for member in cls)
 
@@ -44,10 +46,12 @@ class DocGroup(Enum):
             exp_groups == found_groups
         ), f"{cls} needs to be updated. Found members {found_groups}, but expected {exp_groups}."
 
-    def get_filter(self) -> dict[str, Any]:
+    def get_filter(self) -> dict[str, Any] | None:
         """Gets the Chroma filter to use for a particular group."""
-        # Add in material and admin to every assignment related query
+        if self is DocGroup.all:
+            return None
         if self in EXERCISES or self in PROJECTS:
+            # Add in material and admin to every assignment related query
             return {
                 "group": {
                     "$in": [str(self), str(DocGroup.material), str(DocGroup.admin)]
