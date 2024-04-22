@@ -158,11 +158,11 @@ def backend() -> bytes:
         p90=np.percentile(latency, 90).item(),
         p99=np.percentile(latency, 99).item(),
     )
-    rps = np.array(thread_reqs)
+    rps = np.array(thread_reqs) / TEST_RUNTIME
     rps_stats = dict(
         avg=np.mean(rps).item(),
         std=np.std(rps).item(),
-        max=np.max(rps).item(),  # type: ignore[reportAny]
+        max=np.max(rps).item(),
     )
     stats = dict(latency=latency_stats, rps=rps_stats)
 
