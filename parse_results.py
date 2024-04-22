@@ -1,7 +1,12 @@
-from collections.abc import Iterator
 import re
+from collections.abc import Iterator
+from enum import Enum, auto
 from pathlib import Path
+
+import matplotlib.style
 import pandas as pd
+
+matplotlib.style.use("seaborn-v0_8")
 
 RESULTS = Path("./results")
 
@@ -41,79 +46,98 @@ def extract_row(
     return vals
 
 
-def plot_latency(df: pd.DataFrame, relative: bool) -> None:
-    if relative:
-        baseline: pd.Series[float] = df.loc["eevdf"]  # type: ignore[reportAssignmentType]
-        baseline[["Stdev (ms)", "+/- Stdev (%)"]] = 0
-        df = df.drop("eevdf") - baseline  # type: ignore[reportUnknownMemberType]
+class GraphType(Enum):
+    ABSOLUTE = auto()
+    RELATIVE = auto()
+    PERCENTAGE = auto()
 
-    rel_prefix = " Relative to EEVDF" if relative else ""
+
+def plot_latency(df: pd.DataFrame, graph_type: GraphType) -> None:
+    if graph_type is GraphType.RELATIVE:
+        baseline: pd.Series[float] = df.loc["eevdf"].copy()  # type: ignore[reportAssignmentType]
+        baseline[["Stdev (ms)", "+/- Stdev (%)"]] = 0
+        df = df - baseline
+    elif graph_type is GraphType.PERCENTAGE:
+        baseline: pd.Series[float] = df.loc["eevdf"]  # type: ignore[reportAssignmentType]
+        df = df.drop("eevdf") / baseline  # type: ignore[reportUnknownMemberType]
+        df["Avg (ms)"] -= 1
+
+    suffix: str = " Relative to EEVDF" if graph_type is not GraphType.ABSOLUTE else ""
+    y_units: str = "%" if graph_type is GraphType.PERCENTAGE else "ms"
 
     ax = df.plot(
         # x="Scheduler",
         use_index=True,
         y="Avg (ms)",
-        yerr="Stdev (ms)",
+        yerr="Stdev (ms)" if graph_type is not GraphType.PERCENTAGE else None,  # type: ignore[reportArgumentType]
         kind="bar",
-        title=f"Scheduler vs. Average Latency{rel_prefix}",
-        ylabel=f"Average Latency (ms){rel_prefix}",
+        title=f"Scheduler vs. Average Latency{suffix}",
+        ylabel=f"Average Latency ({y_units}){suffix}",
         xlabel="Scheduler",
         legend=False,
         rot=45,
     )
     fig = ax.get_figure()
     _ = ax.set_xticklabels(ax.get_xticklabels(), ha="right")  # type: ignore[reportUnknownMemberType]
-    suffix = "-relative" if relative else ""
-    fig.savefig(f"latency{suffix}.png", bbox_inches="tight")  # type: ignore[reportUnknownMemberType]
+    fig.savefig(f"latency-{graph_type.name.lower()}.png", bbox_inches="tight")  # type: ignore[reportUnknownMemberType]
 
-def plot_tail_latency(df: pd.DataFrame, relative: bool) -> None:
-    if relative:
-        baseline: pd.Series[float] = df.loc["eevdf"]  # type: ignore[reportAssignmentType]
+
+def plot_tail_latency(df: pd.DataFrame, graph_type: GraphType) -> None:
+    if graph_type is GraphType.RELATIVE:
+        baseline: pd.Series[float] = df.loc["eevdf"].copy()  # type: ignore[reportAssignmentType]
         baseline[["Stdev (ms)", "+/- Stdev (%)"]] = 0
-        df = df.drop("eevdf") - baseline  # type: ignore[reportUnknownMemberType]
+        df = df - baseline
+    elif graph_type is GraphType.PERCENTAGE:
+        baseline: pd.Series[float] = df.loc["eevdf"]  # type: ignore[reportAssignmentType]
+        df = df.drop("eevdf") / baseline  # type: ignore[reportUnknownMemberType]
+        df["99% (ms)"] -= 1
 
-    rel_prefix = " Relative to EEVDF" if relative else ""
+    suffix: str = " Relative to EEVDF" if graph_type is not GraphType.ABSOLUTE else ""
+    y_units: str = "%" if graph_type is GraphType.PERCENTAGE else "ms"
 
     ax = df.plot(
-        # x="Scheduler",
         use_index=True,
         y="99% (ms)",
+        yerr="Stdev (ms)" if graph_type is not GraphType.PERCENTAGE else None,  # type: ignore[reportArgumentType]
         kind="bar",
-        title=f"Scheduler vs. 99% tail latency{rel_prefix}",
-        ylabel=f"99% Tail Latency (ms){rel_prefix}",
+        title=f"Scheduler vs. 99% tail latency{suffix}",
+        ylabel=f"99% Tail Latency ({y_units}){suffix}",
         xlabel="Scheduler",
         legend=False,
         rot=45,
     )
     fig = ax.get_figure()
     _ = ax.set_xticklabels(ax.get_xticklabels(), ha="right")  # type: ignore[reportUnknownMemberType]
-    suffix = "-relative" if relative else ""
-    fig.savefig(f"tail-latency{suffix}.png", bbox_inches="tight")  # type: ignore[reportUnknownMemberType]
+    fig.savefig(f"tail-latency-{graph_type.name.lower()}.png", bbox_inches="tight")  # type: ignore[reportUnknownMemberType]
 
-def plot_requests(df: pd.DataFrame, relative: bool) -> None:
-    if relative:
-        baseline: pd.Series[float] = df.loc["eevdf"]  # type: ignore[reportAssignmentType]
+
+def plot_requests(df: pd.DataFrame, graph_type: GraphType) -> None:
+    if graph_type is GraphType.RELATIVE:
+        baseline: pd.Series[float] = df.loc["eevdf"].copy()  # type: ignore[reportAssignmentType]
         baseline[["Stdev", "+/- Stdev (%)"]] = 0
-        df = df.drop("eevdf") - baseline  # type: ignore[reportUnknownMemberType]
+        df = df - baseline
+    elif graph_type is GraphType.PERCENTAGE:
+        baseline: pd.Series[float] = df.loc["eevdf"]  # type: ignore[reportAssignmentType]
+        df = df.drop("eevdf") / baseline  # type: ignore[reportUnknownMemberType]
+        df["Avg"] -= 1
 
-    rel_prefix = " Relative to EEVDF" if relative else ""
+    suffix: str = " Relative to EEVDF" if graph_type is not GraphType.ABSOLUTE else ""
+    y_units: str = " (%)" if graph_type is GraphType.PERCENTAGE else ""
 
     ax = df.plot(
-        # x="Scheduler",
         use_index=True,
         y="Avg",
-        yerr="Stdev",
+        yerr="Stdev" if graph_type is not GraphType.PERCENTAGE else None,  # type: ignore[reportArgumentType]
         kind="bar",
-        title=f"Scheduler vs. Average Requests/Second{rel_prefix}",
-        ylabel=f"Average Requests/Second{rel_prefix}",
+        title=f"Scheduler vs. Average Requests/Second{suffix}",
+        ylabel=f"Average Requests/Second{y_units}{suffix}",
         xlabel="Scheduler",
         legend=False,
         rot=45,
     )
     _ = ax.set_xticklabels(ax.get_xticklabels(), ha="right")  # type: ignore[reportUnknownMemberType]
     fig = ax.get_figure()
-    suffix = "-relative" if relative else ""
-    fig.savefig(f"requests{suffix}.png", bbox_inches="tight")  # type: ignore[reportUnknownMemberType]
+    fig.savefig(f"requests{graph_type.name.lower()}.png", bbox_inches="tight")  # type: ignore[reportUnknownMemberType]
 
 
 latency_rows: list[list[str | float]] = []
@@ -153,9 +177,9 @@ requests = requests.set_index("Scheduler")  # type: ignore[reportUnknownMemberTy
 print(latency)
 print(requests)
 
-plot_latency(latency, True)
-plot_latency(latency, False)
-plot_tail_latency(latency, True)
-plot_tail_latency(latency, False)
-plot_requests(requests, True)
-plot_requests(requests, False)
+plot_latency(latency, GraphType.RELATIVE)
+plot_latency(latency, GraphType.PERCENTAGE)
+plot_tail_latency(latency, GraphType.RELATIVE)
+plot_tail_latency(latency, GraphType.PERCENTAGE)
+plot_requests(requests, GraphType.RELATIVE)
+plot_requests(requests, GraphType.PERCENTAGE)
