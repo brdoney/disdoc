@@ -7,7 +7,7 @@ RESULTS = Path("./results")
 
 latency_pat = re.compile(r"Latency\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)%")
 rps_pat = re.compile(r"Req\/Sec\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)%")
-dist_pat = re.compile(r"\d+%\s+(\S+)m?s")
+dist_pat = re.compile(r"\d+%\s+(\S+m?s)")
 
 
 def pathname(p: Path) -> str:
@@ -66,6 +66,29 @@ def plot_latency(df: pd.DataFrame, relative: bool) -> None:
     suffix = "-relative" if relative else ""
     fig.savefig(f"latency{suffix}.png", bbox_inches="tight")  # type: ignore[reportUnknownMemberType]
 
+def plot_tail_latency(df: pd.DataFrame, relative: bool) -> None:
+    if relative:
+        baseline: pd.Series[float] = df.loc["eevdf"]  # type: ignore[reportAssignmentType]
+        baseline[["Stdev (ms)", "+/- Stdev (%)"]] = 0
+        df = df.drop("eevdf") - baseline  # type: ignore[reportUnknownMemberType]
+
+    rel_prefix = " Relative to EEVDF" if relative else ""
+
+    ax = df.plot(
+        # x="Scheduler",
+        use_index=True,
+        y="99% (ms)",
+        kind="bar",
+        title=f"Scheduler vs. 99% tail latency{rel_prefix}",
+        ylabel=f"99% Tail Latency (ms){rel_prefix}",
+        xlabel="Scheduler",
+        legend=False,
+        rot=45,
+    )
+    fig = ax.get_figure()
+    _ = ax.set_xticklabels(ax.get_xticklabels(), ha="right")  # type: ignore[reportUnknownMemberType]
+    suffix = "-relative" if relative else ""
+    fig.savefig(f"tail-latency{suffix}.png", bbox_inches="tight")  # type: ignore[reportUnknownMemberType]
 
 def plot_requests(df: pd.DataFrame, relative: bool) -> None:
     if relative:
@@ -115,10 +138,10 @@ lat_col_names = [
     "Stdev (ms)",
     "Max (ms)",
     "+/- Stdev (%)",
-    "50% (s)",
-    "75% (s)",
-    "90% (s)",
-    "99% (s)",
+    "50% (ms)",
+    "75% (ms)",
+    "90% (ms)",
+    "99% (ms)",
 ]
 latency = pd.DataFrame(data=latency_rows, columns=lat_col_names)
 latency = latency.set_index("Scheduler")  # type: ignore[reportUnknownMemberType]
@@ -132,5 +155,7 @@ print(requests)
 
 plot_latency(latency, True)
 plot_latency(latency, False)
+plot_tail_latency(latency, True)
+plot_tail_latency(latency, False)
 plot_requests(requests, True)
 plot_requests(requests, False)
