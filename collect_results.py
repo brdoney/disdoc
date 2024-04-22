@@ -5,6 +5,9 @@ from datetime import datetime
 import time
 
 SCHEDS = [
+    "warmup",
+    # Default (EEVDF)
+    "eevdf",
     # One sched
     # "scx_flatcg",  # Seems to stall sometimes?
     "scx_central",
@@ -30,10 +33,13 @@ CURR_RESULTS.mkdir()
 for sched in SCHEDS:
     print(f"Starting {sched} test")
 
-    sched_cmd = f"sudo {sched}"
+    if sched == "eevdf" or sched == "warmup":
+        sched_cmd = f"echo {sched}"
+    else:
+        sched_cmd = f"sudo {sched}"
     p_sched = subprocess.Popen(shlex.split(sched_cmd))
 
-    wrk_cmd = "wrk -t10 -c20 -d30s --script wrk-script.lua http://localhost:8080/ask"
+    wrk_cmd = "wrk -t10 -c20 -d30s --latency --script wrk-script.lua http://localhost:8080/ask"
     res = subprocess.check_output(shlex.split(wrk_cmd))
 
     # We're done testing the current scheduler, so kill it
@@ -46,7 +52,10 @@ for sched in SCHEDS:
 
     print(f"Finished {sched} test")
 
-    _ = (CURR_RESULTS / f"{sched}.txt").write_bytes(res)
-
     # Wait for any of last test's connections to finish up
     time.sleep(5)
+
+    if sched == "warmup":
+        continue
+
+    _ = (CURR_RESULTS / f"{sched}.txt").write_bytes(res)

@@ -175,3 +175,4 @@ blacklist.txt
 
 # Extensibility final project
 results/
+*.png
