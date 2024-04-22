@@ -2,11 +2,10 @@ import json
 import math
 import shlex
 import subprocess
+import threading
 import time
 from datetime import datetime
-from enum import Enum, auto
 from pathlib import Path
-import threading
 from timeit import default_timer as timer
 from typing import Callable
 
@@ -14,6 +13,7 @@ import numpy as np
 
 from categories import DocGroup
 from main import ask
+from test_types import TestType
 
 SCHEDS = [
     "warmup",
@@ -64,12 +64,6 @@ def stop_scheduler(sched: str, p_sched: subprocess.Popen[bytes]) -> None:
 
     # Wait for any of last test's connections to finish up
     time.sleep(5)
-
-
-class TestType(Enum):
-    FULL = auto()
-    BACKEND = auto()
-    FRONTEND = auto()
 
 
 def write_output(sched: str, tt: TestType, result: bytes) -> None:
@@ -162,7 +156,7 @@ def backend() -> bytes:
         p50=np.percentile(latency, 50).item(),
         p75=np.percentile(latency, 75).item(),
         p90=np.percentile(latency, 90).item(),
-        p95=np.percentile(latency, 95).item(),
+        p99=np.percentile(latency, 99).item(),
     )
     rps = np.array(thread_reqs)
     rps_stats = dict(

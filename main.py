@@ -1,5 +1,4 @@
 import json
-import os
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
