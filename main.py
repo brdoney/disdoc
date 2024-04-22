@@ -1,19 +1,20 @@
 import json
+import os
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from timeit import default_timer as timer
 from typing import Any  # type: ignore[reportAny]
 from urllib.parse import ParseResult, parse_qsl, urlencode, urlparse
-import uuid
 
 from dataclasses_json import DataClassJsonMixin
+from flask import Flask, request
 from marshmallow import ValidationError
 
 from categories import DocGroup
 from chroma import create_chroma_client, create_chroma_collection, create_embeddings
 from env_var import MAPPINGS_PATH, SOURCE_DIRECTORY
 from pdf_images import load_image_cache, pdf_image, save_image_cache
-from flask import Flask, request
 
 with open(MAPPINGS_PATH) as f:
     NAME_TO_URL: dict[str, str] = json.load(f)
@@ -130,6 +131,20 @@ def accept_ask():
         return str(e), 400
 
 
+@app.get("/askecho")
+def askecho():
+    j: dict[str, Any] = request.get_json(False)
+    try:
+        req: AskRequest = AskRequest.schema().from_dict(j)  # type: ignore[reportUnknownMemberType]
+        category = DocGroup.from_str(req.category)
+        question = req.question
+        post_id = uuid.uuid4()
+        resp = AskRecord(str(post_id), question, category.name, [])
+        return resp.to_json(), 200  # type: ignore[reportUnknownMemberType]
+    except ValidationError as e:
+        return str(e), 400
+
+
 def ask(question: str, category: DocGroup):
     # Log post in DB
     post_id = uuid.uuid4()
@@ -195,11 +210,6 @@ def ask(question: str, category: DocGroup):
         _ = f.write(s)
 
     return record.to_json(), 200  # type: ignore[reportUnknownMemberType]
-
-
-@app.get("/ping")
-def pong():
-    return "pong", 200
 
 
 if __name__ == "__main__":
