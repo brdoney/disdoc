@@ -4,7 +4,7 @@ from collections.abc import Iterable, Iterator
 from enum import Enum, auto
 from pathlib import Path
 from typing import Literal
-from typing_extensions import overload
+from typing_extensions import no_type_check, overload
 
 import matplotlib.style
 import pandas as pd
@@ -63,7 +63,7 @@ def tt_prefix(s: str | list[str]) -> list[str]:
     else:
         els: list[str] = []
         for el in s:
-            for tt in TestType:
+            for tt in TestType.sorted():
                 prefixed = f"{tt.name.title()} {el}"
                 if prefixed in latency_rows or prefixed in request_rows:
                     els.append(prefixed)
@@ -80,7 +80,7 @@ def plot_latency(df: pd.DataFrame, graph_type: GraphType) -> None:
     if graph_type is GraphType.RELATIVE:
         baseline: pd.Series[float] = df.loc["eevdf"].copy()  # type: ignore[reportAssignmentType]
         baseline[tt_prefix(["Stdev (ms)", "+/- Stdev (%)"])] = 0
-        df = df - baseline
+        df = df.drop("eevdf") - baseline  # type: ignore[reportUnknownMemberType]
     elif graph_type is GraphType.PERCENTAGE:
         baseline: pd.Series[float] = df.loc["eevdf"]  # type: ignore[reportAssignmentType]
         df = df.drop("eevdf") / baseline  # type: ignore[reportUnknownMemberType]
@@ -118,7 +118,7 @@ def plot_tail_latency(df: pd.DataFrame, graph_type: GraphType) -> None:
     if graph_type is GraphType.RELATIVE:
         baseline: pd.Series[float] = df.loc["eevdf"].copy()  # type: ignore[reportAssignmentType]
         baseline[tt_prefix(["Stdev (ms)", "+/- Stdev (%)"])] = 0
-        df = df - baseline
+        df = df.drop("eevdf") - baseline  # type: ignore[reportUnknownMemberType]
     elif graph_type is GraphType.PERCENTAGE:
         baseline: pd.Series[float] = df.loc["eevdf"]  # type: ignore[reportAssignmentType]
         df = df.drop("eevdf") / baseline  # type: ignore[reportUnknownMemberType]
@@ -149,7 +149,7 @@ def plot_requests(df: pd.DataFrame, graph_type: GraphType) -> None:
     if graph_type is GraphType.RELATIVE:
         baseline: pd.Series[float] = df.loc["eevdf"].copy()  # type: ignore[reportAssignmentType]
         baseline[tt_prefix(["Stdev", "+/- Stdev (%)"])] = 0
-        df = df - baseline
+        df = df.drop("eevdf") - baseline  # type: ignore[reportUnknownMemberType]
     elif graph_type is GraphType.PERCENTAGE:
         baseline: pd.Series[float] = df.loc["eevdf"]  # type: ignore[reportAssignmentType]
         df = df.drop("eevdf") / baseline  # type: ignore[reportUnknownMemberType]
@@ -180,7 +180,7 @@ def plot_requests(df: pd.DataFrame, graph_type: GraphType) -> None:
     )
     _ = ax.set_xticklabels(ax.get_xticklabels(), ha="right")  # type: ignore[reportUnknownMemberType]
     fig = ax.get_figure()
-    fig.savefig(f"requests{graph_type.name.lower()}.png", bbox_inches="tight", dpi=200)  # type: ignore[reportUnknownMemberType]
+    fig.savefig(f"requests-{graph_type.name.lower()}.png", bbox_inches="tight", dpi=200)  # type: ignore[reportUnknownMemberType]
 
 
 def add_to_dict(
@@ -319,10 +319,23 @@ if input("Generate graphs? [y/N] ").lower() == "y":
     plot_requests(requests, GraphType.RELATIVE)
     plot_requests(requests, GraphType.PERCENTAGE)
 
-latency_mins = latency.idxmin()  # type: ignore[reportUnknownMemberType]
-print("Latency minimums:")
-print(latency_mins[tt_prefix(["Avg (ms)", "99% (ms)"])])  # type: ignore[reportUnknownMemberType]
 
-request_mins = requests.idxmax()  # type: ignore[reportUnknownMemberType]
+@no_type_check
+def print_sorted_cols(df: pd.DataFrame, cols: list[str], invert: bool) -> None:
+    for col in cols:
+        extrema: pd.Series = df[col]
+        extrema = ((extrema / extrema["eevdf"]) - 1) * 100
+        if invert:
+            extrema *= -1
+        extrema = extrema.sort_values(ascending=False)
+        # print(sorted_mins.name, " ".join(sorted_mins.index))
+        print(extrema)
+
+
+# print("Latency minimums:")
+# min_cols = tt_prefix(["Avg (ms)", "99% (ms)"])
+# print_sorted_cols(latency, min_cols, True)
+
 print("RPS maximums:")
-print(request_mins[tt_prefix("Avg")])  # type: ignore[reportUnknownMemberType]
+min_cols = tt_prefix("Avg")
+print_sorted_cols(requests, min_cols, False)
