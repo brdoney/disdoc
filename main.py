@@ -246,7 +246,18 @@ def ask(question: str, category: DocGroup):
     return record.to_json(), 200  # type: ignore[reportUnknownMemberType]
 
 
-# _ = schedman.CFS(["scx_rustland", "scx_rusty"], 0.75)
+# Frontend and backend, respectively
+best_scheds = ["scx_rustland", "scx_rusty"]
+frontend_s = 16.68
+backend_s = 3.14
+frontend_benefit = 12.29
+backend_benefit = 2.92
+# _ = schedman.CFS(best_scheds, 0.75)
+_ = schedman.DeltaWeightedCFS(best_scheds, frontend_s, backend_s, 1.8)  # BEST RESULTS
+# _ = schedman.BenefitWeightedCFS(best_scheds, frontend_benefit, backend_benefit, 1)
+# _ = schedman.DeltaBenefitWeightedCFS(
+#     best_scheds, frontend_s, frontend_benefit, backend_s, backend_benefit, 2.1
+# )
 
 if __name__ == "__main__":
     app.run()
