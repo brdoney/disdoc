@@ -321,21 +321,25 @@ if input("Generate graphs? [y/N] ").lower() == "y":
 
 
 @no_type_check
-def print_sorted_cols(df: pd.DataFrame, cols: list[str], invert: bool) -> None:
+def make_col_sorted_percent(series: pd.Series, invert: bool) -> pd.Series:
+    series = ((series / series["eevdf"]) - 1) * 100
+    if invert:
+        series *= -1
+    return series.sort_values(ascending=False)
+
+
+@no_type_check
+def print_cols_sorted_percent(df: pd.DataFrame, cols: list[str], invert: bool) -> None:
     for col in cols:
-        extrema: pd.Series = df[col]
-        extrema = ((extrema / extrema["eevdf"]) - 1) * 100
-        if invert:
-            extrema *= -1
-        extrema = extrema.sort_values(ascending=False)
-        # print(sorted_mins.name, " ".join(sorted_mins.index))
-        print(extrema)
+        res = make_col_sorted_percent(df[col], invert)
+        # print(res.name, " ".join(res.index))
+        print(res)
 
 
 # print("Latency minimums:")
 # min_cols = tt_prefix(["Avg (ms)", "99% (ms)"])
-# print_sorted_cols(latency, min_cols, True)
+# print_cols_sorted_percent(latency, min_cols, True)
 
 print("RPS maximums:")
 min_cols = tt_prefix("Avg")
-print_sorted_cols(requests, min_cols, False)
+print_cols_sorted_percent(requests, min_cols, False)

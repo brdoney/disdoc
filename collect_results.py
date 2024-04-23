@@ -11,28 +11,10 @@ from typing import Callable
 
 import numpy as np
 
+import schedman
 from categories import DocGroup
 from main import ask
 from test_types import TestType
-
-SCHEDS = [
-    "warmup",
-    # Default (EEVDF)
-    "eevdf",
-    # One sched
-    # "scx_flatcg",  # Seems to stall sometimes?
-    "scx_central",
-    "scx_nest",
-    "scx_pair",
-    "scx_qmap",
-    "scx_simple",
-    "scx_simple -f",
-    # User-space scheds
-    # "scx_userland",  # Not production ready
-    "scx_rustland",
-    "scx_rusty",
-    # "scx_layered",  # Requires layer spec?
-]
 
 RESULTS = Path("./results")
 RESULTS.mkdir(exist_ok=True)
@@ -40,30 +22,6 @@ RESULTS.mkdir(exist_ok=True)
 dt = datetime.strftime(datetime.now(), "%Y-%m-%d-%H.%M.%S")
 CURR_RESULTS = RESULTS / dt
 CURR_RESULTS.mkdir()
-
-
-def start_scheduler(sched: str) -> subprocess.Popen[bytes]:
-    print(f"Starting {sched} test")
-    if sched == "eevdf" or sched == "warmup":
-        sched_cmd = f"echo {sched}"
-    else:
-        sched_cmd = f"sudo {sched}"
-    return subprocess.Popen(shlex.split(sched_cmd))
-
-
-def stop_scheduler(sched: str, p_sched: subprocess.Popen[bytes]) -> None:
-    # We're done testing the current scheduler, so kill it
-    p_sched.terminate()
-    ret = p_sched.wait()
-
-    if ret != 0:
-        print(f"Failed {sched} test")
-        exit(ret)
-
-    print(f"Finished {sched} test")
-
-    # Wait for any of last test's connections to finish up
-    time.sleep(5)
 
 
 def write_output(sched: str, tt: TestType, result: bytes) -> None:
@@ -78,10 +36,22 @@ def write_output(sched: str, tt: TestType, result: bytes) -> None:
 
 
 def run_test(tt: TestType, test_func: Callable[[], bytes]) -> None:
-    for sched in SCHEDS:
-        p_sched = start_scheduler(sched)
+    for sched in schedman.SCHEDS:
+        print(f"Starting {sched}")
+        p_sched = schedman.start_scheduler(sched)
+
         res = test_func()
-        stop_scheduler(sched, p_sched)
+
+        ret = schedman.stop_scheduler(p_sched)
+
+        if ret != 0:
+            print(f"Failed to kill {sched}")
+            exit(ret)
+
+        print(f"Killed {sched}")
+        # Wait for any of last test's connections to finish up
+        time.sleep(5)
+
         write_output(sched, tt, res)
 
 
