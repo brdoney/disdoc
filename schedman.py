@@ -27,7 +27,9 @@ def start_scheduler(sched: str) -> subprocess.Popen[bytes]:
         sched_cmd = f"echo {sched}"
     else:
         sched_cmd = f"sudo {sched}"
-    return subprocess.Popen(shlex.split(sched_cmd))
+    return subprocess.Popen(
+        shlex.split(sched_cmd), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+    )
 
 
 def stop_scheduler(p_sched: subprocess.Popen[bytes]) -> int:
@@ -76,6 +78,7 @@ class CFS:
     def _update(self) -> None:
         self.curr_i = (self.curr_i + 1) % len(self.scheds)
         self.curr_sched = self.scheds[self.curr_i]
+        print(f"Switching to {self.curr_sched}")
         self.curr_p_sched = switch_scheduler(self.curr_sched, self.curr_p_sched)
         self.timer = self._create_timer()
         self.timer.start()

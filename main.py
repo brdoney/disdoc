@@ -1,4 +1,5 @@
 import json
+import threading
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -10,6 +11,7 @@ from dataclasses_json import DataClassJsonMixin
 from flask import Flask, request
 from marshmallow import ValidationError
 
+import schedman
 from categories import DocGroup
 from chroma import create_chroma_client, create_chroma_collection, create_embeddings
 from env_var import MAPPINGS_PATH, SOURCE_DIRECTORY
@@ -118,6 +120,32 @@ class AskRequest(DataClassJsonMixin):
     category: str
 
 
+@dataclass
+class Rate:
+    rate: float | None
+    last_time: float | None
+    lock: threading.Lock
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.rate = None
+        self.last_time = None
+        self.lock = threading.Lock()
+
+    def update(self) -> None:
+        new_time = timer()
+        with self.lock:
+            if self.last_time is None:
+                self.last_time = new_time
+            else:
+                self.rate = new_time - self.last_time
+                self.last_time = new_time
+
+
+frontend_rate = Rate()
+backend_rate = Rate()
+
+
 @app.post("/ask")
 def accept_ask():
     j: dict[str, Any] = request.get_json(False)
@@ -125,6 +153,9 @@ def accept_ask():
         req: AskRequest = AskRequest.schema().from_dict(j)  # type: ignore[reportUnknownMemberType]
         category = DocGroup.from_str(req.category)
         question = req.question
+
+        # frontend_rate.update()
+
         return ask(question, category)
     except ValidationError as e:
         return str(e), 400
@@ -137,6 +168,10 @@ def askecho():
         req: AskRequest = AskRequest.schema().from_dict(j)  # type: ignore[reportUnknownMemberType]
         category = DocGroup.from_str(req.category)
         question = req.question
+
+        # frontend_rate.update()
+
+        # Simulating a dummy ask
         post_id = uuid.uuid4()
         resp = AskRecord(str(post_id), question, category.name, [])
         return resp.to_json(), 200  # type: ignore[reportUnknownMemberType]
@@ -210,6 +245,8 @@ def ask(question: str, category: DocGroup):
 
     return record.to_json(), 200  # type: ignore[reportUnknownMemberType]
 
+
+# _ = schedman.CFS(["scx_rustland", "scx_rusty"], 0.75)
 
 if __name__ == "__main__":
     app.run()
