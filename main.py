@@ -157,13 +157,14 @@ class AskRecord(DataClassJsonMixin):
     answer: str | None = None
 
 
+@app_commands.guild_only()
 @client.tree.command(description="Ask for documents related to your question")
-@app_commands.describe(use_llm="Whether to generate an answer using an LLM")
+@app_commands.describe(answer="Whether to generate an answer using an LLM")
 @app_commands.describe(category="The category this question is about")
 @app_commands.describe(question="Question or statement you're interested in")
 async def ask(
     interaction: discord.Interaction,
-    use_llm: bool,
+    answer: bool,
     category: DocGroup,
     question: str,
 ):
@@ -177,7 +178,7 @@ async def ask(
         return
 
     # Log post in DB
-    post_id = log_post(interaction.id, user, use_llm, llm_type)
+    post_id = log_post(interaction.id, user, answer, llm_type)
 
     # Defer b/c loading vector DB from scratch takes longer than discord's response timeout
     await interaction.response.defer(thinking=True)
@@ -264,8 +265,8 @@ async def ask(
 
     # Don't continue if we're not generating the answer with an LLM
     generation_time = None
-    answer = None
-    if use_llm:
+    answer_text = None
+    if answer:
         # Send a message to mark that we're generating the answer
         msg = await interaction.followup.send("Generating answer...", wait=True)
 
@@ -295,20 +296,20 @@ async def ask(
         print(f"Generation: {generation_time}s")
 
         # We have the full answer now
-        answer = line
+        answer_text = line
 
         llm_review = ReviewButtonView(ReviewType.LLM, post_id)
 
         # Just in case last necessary edit didn't go through due to timeout
         # Also take the time to add a review button
-        msg = await msg.edit(content=answer, view=llm_review)
+        msg = await msg.edit(content=answer_text, view=llm_review)
 
     if post_id is not None:
         # Only log info if we have a post on the books (i.e. consent was given)
 
         log_post_times(post_id, retrieval_time, generation_time)
 
-        record = AskRecord(post_id, embed_records, answer)
+        record = AskRecord(post_id, embed_records, answer_text)
         with (RECORDS_DIR / f"post_{post_id}.json").open("w") as f:
             s = record.to_json(indent=2)  # type: ignore[reportUnknownMemberType]
             _ = f.write(s)
