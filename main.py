@@ -23,7 +23,7 @@ from env_var import (
 from llm import LLMType
 from pdf_images import load_image_cache, pdf_image, save_image_cache
 from reviews import ReviewButtonView, ReviewType
-from sqlite_db import check_consent, log_post, log_post_times
+from sqlite_db import check_consent, get_review_count, log_post, log_post_times
 
 with open(MAPPINGS_PATH) as f:
     NAME_TO_URL: dict[str, str] = json.load(f)
@@ -340,6 +340,23 @@ async def consent(interaction: discord.Interaction) -> None:
         ),
         ephemeral=True,
     )
+
+
+@client.tree.command(description="Tells you how many reviews you've given")
+async def reviewcount(interaction: discord.Interaction) -> None:
+    user = check_consent(interaction.user.id)
+    if user is None:
+        await interaction.response.send_message(
+            "You have not indicated your consent status. "
+            + "Please do so with the `/consent` command before using any other commands.",
+            ephemeral=True,
+        )
+    else:
+        num_reviews = get_review_count(user)
+        await interaction.response.send_message(
+            f"You have given {num_reviews} reviews",
+            ephemeral=True,
+        )
 
 
 @client.tree.command(description="Admin only: get or set the edit buffer")
