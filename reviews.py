@@ -12,6 +12,10 @@ class ReviewType(Enum):
     RETRIEVAL = auto()
     LLM = auto()
 
+    @staticmethod
+    def from_str(s: str) -> "ReviewType":
+        return ReviewType[s]
+
 
 _HELPFULNESS_OPTIONS = [
     SelectOption(label="Very helpful", value="2"),
@@ -39,12 +43,14 @@ _RELEVANCE_OPTIONS = [
 
 
 class ReviewView(discord.ui.View, ABC):
-    def __init__(self, post_id: int | None, user: UserInfo):
+    def __init__(self, post_id: int | None, user: UserInfo, completed_users: set[int]):
         super().__init__()
         # The ID of the post that this is originally for
         self.post_id = post_id
         # The user who is using this UI
         self.user = user
+        # The users who have completed a review of the associated post
+        self.completed_users = completed_users
 
     @abstractmethod
     def is_review_complete(self) -> bool:
@@ -52,7 +58,7 @@ class ReviewView(discord.ui.View, ABC):
         raise NotImplementedError()
 
     @abstractmethod
-    def log_review(self) -> None:
+    def log_review(self, resubmitting: bool) -> None:
         """Log the results of the review. Called when view is complete."""
         raise NotImplementedError()
 
@@ -68,7 +74,9 @@ class ReviewView(discord.ui.View, ABC):
             )
             # May or may not save content of review, depending on consent status
             # The SQL functions that subclasses use should take care of this check for us
-            self.log_review()
+            discord_id = interaction.user.id
+            self.log_review(discord_id in self.completed_users)
+            self.completed_users.add(discord_id)
         else:
             # Mark the form as incomplete
             await interaction.response.edit_message(
@@ -78,8 +86,8 @@ class ReviewView(discord.ui.View, ABC):
 
 
 class RetrievalReviewView(ReviewView):
-    def __init__(self, post_id: int | None, user: UserInfo):
-        super().__init__(post_id, user)
+    def __init__(self, post_id: int | None, user: UserInfo, completed_users: set[int]):
+        super().__init__(post_id, user, completed_users)
         self.helpfulness: int | None = None
         self.relevance: int | None = None
 
@@ -88,11 +96,12 @@ class RetrievalReviewView(ReviewView):
         return all(val is not None for val in (self.relevance, self.helpfulness))
 
     @override
-    def log_review(self) -> None:
+    def log_review(self, resubmitting: bool) -> None:
         assert self.is_review_complete(), "Trying to log unfinished retrieval review"
         log_retrieval_review(
             self.post_id,
             self.user,
+            resubmitting,
             self.relevance,  # type: ignore[reportArgumentType]
             self.helpfulness,  # type: ignore[reportArgumentType]
         )
@@ -131,8 +140,8 @@ class RetrievalReviewView(ReviewView):
 
 
 class LLMReviewView(ReviewView):
-    def __init__(self, post_id: int | None, user: UserInfo):
-        super().__init__(post_id, user)
+    def __init__(self, post_id: int | None, user: UserInfo, completed_users: set[int]):
+        super().__init__(post_id, user, completed_users)
         self.helpfulness: int | None = None
         self.correctness: int | None = None
         self.relevance: int | None = None
@@ -145,11 +154,12 @@ class LLMReviewView(ReviewView):
         )
 
     @override
-    def log_review(self) -> None:
+    def log_review(self, resubmitting: bool) -> None:
         assert self.is_review_complete(), "Trying to log unfinished LLM review"
         log_llm_review(
             self.post_id,
             self.user,
+            resubmitting,
             self.relevance,  # type: ignore[reportArgumentType]
             self.helpfulness,  # type: ignore[reportArgumentType]
             self.correctness,  # type: ignore[reportArgumentType]
@@ -208,6 +218,8 @@ class ReviewButtonView(discord.ui.View):
         """What kind of post this button view is attached to"""
         self.post_id = post_id
         """DB ID for the post this is attached to"""
+        self.completed_users: set[int] = set()
+        """Set of Discord IDs of users who have finished reviews, so we don't award double credit"""
 
     @discord.ui.button(label="Start Review", style=discord.ButtonStyle.primary)
     async def start_review(
@@ -223,14 +235,15 @@ class ReviewButtonView(discord.ui.View):
             return
 
         if self.post_type is ReviewType.RETRIEVAL:
-            view = RetrievalReviewView(self.post_id, user)
+            view = RetrievalReviewView(self.post_id, user, self.completed_users)
         elif self.post_type is ReviewType.LLM:
-            view = LLMReviewView(self.post_id, user)
+            view = LLMReviewView(self.post_id, user, self.completed_users)
         else:
             raise ValueError(f"Unsupported PostType {self.post_type}")
 
-        await interaction.response.send_message(
-            "Please answer the following questions **according to your opinion**",
-            view=view,
-            ephemeral=True,
-        )
+        if interaction.user.id not in self.completed_users:
+            message = "Review in progress..."
+        else:
+            message = "Editing past review..."
+
+        await interaction.response.send_message(message, view=view, ephemeral=True)

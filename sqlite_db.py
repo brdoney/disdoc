@@ -112,19 +112,20 @@ def _update_grade(
 def log_llm_review(
     post_id: int | None,
     author: UserInfo,
+    resubmitting: bool,
     relevance: int,
     helpfulness: int,
     correctness: int,
 ):
     """Log an LLM review by updating a user's grade and, if they gave consent, storing its contents."""
     cur = db.cursor()
-    if post_id is not None:
-        assert author.consent, "Trying to log LLM review for user who denied consent"
+    if post_id is not None and author.consent:
         _ = cur.execute(
             "INSERT OR REPLACE INTO llm_reviews (post_id, author, relevance, helpfulness, correctness) VALUES (?, ?, ?, ?, ?)",
             (post_id, author.id, relevance, helpfulness, correctness),
         )
-    _update_grade(cur, author, "llm_reviews")
+    if not resubmitting:
+        _update_grade(cur, author, "llm_reviews")
 
     db.commit()
 
@@ -132,20 +133,37 @@ def log_llm_review(
 
 
 def log_retrieval_review(
-    post_id: int | None, author: UserInfo, relevance: int, helpfulness: int
+    post_id: int | None,
+    author: UserInfo,
+    resubmitting: bool,
+    relevance: int,
+    helpfulness: int,
 ):
     """Log an retrieval review by updating a user's grade and, if they gave consent, storing its contents."""
     cur = db.cursor()
-    if post_id is not None:
-        assert (
-            author.consent
-        ), "Trying to log retrieval review for user who denied consent"
+    if post_id is not None and author.consent:
         _ = cur.execute(
             "INSERT OR REPLACE INTO retrieval_reviews (post_id, author, relevance, helpfulness) VALUES (?, ?, ?, ?)",
             (post_id, author.id, relevance, helpfulness),
         )
-    _update_grade(cur, author, "retrieval_reviews")
+    if not resubmitting:
+        _update_grade(cur, author, "retrieval_reviews")
 
     db.commit()
 
     print(f"Logged retrieval review for post {post_id}")
+
+
+def get_review_count(user: UserInfo) -> int:
+    query = """
+    SELECT llm_reviews, retrieval_reviews FROM grading
+        WHERE pid IN (SELECT pid FROM users WHERE id = ?)
+    """
+    res: tuple[int, int] | None = db.execute(query, (user.id,)).fetchone()
+
+    if res is None:
+        # Not in table yet, so 0
+        return 0
+
+    # Add together LLM and retrieval reviews
+    return res[0] + res[1]
