@@ -5,6 +5,7 @@ import discord
 from discord import SelectOption
 from typing_extensions import Self, override
 
+from client import MyClient, disable_children
 from sqlite_db import UserInfo, check_consent, log_llm_review, log_retrieval_review
 
 
@@ -44,7 +45,7 @@ _RELEVANCE_OPTIONS = [
 
 class ReviewView(discord.ui.View, ABC):
     def __init__(self, post_id: int | None, user: UserInfo, completed_users: set[int]):
-        super().__init__()
+        super().__init__(timeout=None)
         # The ID of the post that this is originally for
         self.post_id = post_id
         # The user who is using this UI
@@ -66,9 +67,8 @@ class ReviewView(discord.ui.View, ABC):
         """Submits and disable the review if the form is detected as complete."""
         if self.is_review_complete():
             # Disable the form
-            for child in self.children:
-                if isinstance(child, (discord.ui.Button, discord.ui.Select)):
-                    child.disabled = True
+            disable_children(self)
+
             await interaction.response.edit_message(
                 content="Review Complete!", view=self
             )
@@ -213,7 +213,7 @@ class LLMReviewView(ReviewView):
 
 class ReviewButtonView(discord.ui.View):
     def __init__(self, post_type: ReviewType, post_id: int | None):
-        super().__init__()
+        super().__init__(timeout=None)
         self.post_type = post_type
         """What kind of post this button view is attached to"""
         self.post_id = post_id
@@ -247,3 +247,7 @@ class ReviewButtonView(discord.ui.View):
             message = "Editing past review..."
 
         await interaction.response.send_message(message, view=view, ephemeral=True)
+
+        client = interaction.client
+        if isinstance(client, MyClient):
+            client.track_view(view, await interaction.original_response())

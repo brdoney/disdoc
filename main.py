@@ -1,18 +1,20 @@
+import asyncio
 import json
 from dataclasses import dataclass
 from pathlib import Path
 from timeit import default_timer as timer
 from typing import Any  # type: ignore[reportAny]
 from urllib.parse import ParseResult, parse_qsl, urlencode, urlparse
+import signal
 
 import discord
 from dataclasses_json import DataClassJsonMixin
 from discord import app_commands
 from discord.ext import commands
-from typing_extensions import override
 
 from categories import DocGroup
 from chroma import create_chroma_client, create_chroma_collection, create_embeddings
+from client import MyClient
 from env_var import (
     CLICK_URL,
     CONSENT_URL,
@@ -50,29 +52,7 @@ llm_type: LLMType = LLMType.MOCK
 # Load the docment -> image translations from memory
 load_image_cache()
 
-
-class MyClient(discord.Client):
-    def __init__(self, *, intents: discord.Intents, activity: discord.Activity):
-        super().__init__(intents=intents, activity=activity)
-        self.tree = app_commands.CommandTree(self)
-
-    @override
-    async def setup_hook(self):
-        synced = await self.tree.sync()
-        print(f"Synced {len(synced)} command(s)")
-
-
 client = MyClient(intents=_intents, activity=_activity)
-
-
-@client.event
-async def on_ready():
-    print("Running bot!")
-    if client.user is None:
-        print("Not logged in. An error must have occurred")
-    else:
-        print(f"Logged in as {client.user} (ID: {client.user.id})")
-    print("------")
 
 
 SOURCE_CODE_EXT = {
@@ -256,19 +236,17 @@ async def ask(
     retrieval_review = ReviewButtonView(ReviewType.RETRIEVAL, post_id)
 
     # We use followup since we deferred earlier
-    await interaction.followup.send(
-        f"> {question}",
-        files=files,
-        embeds=embeds,
-        view=retrieval_review,
+    embed_msg = await interaction.followup.send(
+        f"> {question}", files=files, embeds=embeds, view=retrieval_review, wait=True
     )
+    client.track_view(retrieval_review, embed_msg)
 
     # Don't continue if we're not generating the answer with an LLM
     generation_time = None
     answer_text = None
     if answer:
         # Send a message to mark that we're generating the answer
-        msg = await interaction.followup.send("Generating answer...", wait=True)
+        llm_msg = await interaction.followup.send("Generating answer...", wait=True)
 
         start = timer()
         elapsed = 0
@@ -287,7 +265,7 @@ async def ask(
             # after = timer()
             # print(f"llama.cpp token: {after - before}")
             # before = timer()
-            msg = await msg.edit(content=line)
+            llm_msg = await llm_msg.edit(content=line)
             # after = timer()
             # print(f"edit: {after - before}")
             # before = timer()
@@ -302,7 +280,9 @@ async def ask(
 
         # Just in case last necessary edit didn't go through due to timeout
         # Also take the time to add a review button
-        msg = await msg.edit(content=answer_text, view=llm_review)
+        llm_msg = await llm_msg.edit(content=answer_text, view=llm_review)
+
+        client.track_view(llm_review, llm_msg)
 
     if post_id is not None:
         # Only log info if we have a post on the books (i.e. consent was given)
@@ -393,8 +373,8 @@ async def llmtype(interaction: discord.Interaction, new_llm: LLMType | None = No
 @app_commands.checks.has_permissions(administrator=True)
 async def shutdown(interaction: discord.Interaction):
     await interaction.response.send_message("Shutting down bot", ephemeral=True)
+    await client.disable_tracked_views()
     await interaction.client.close()
-    print("Shutdown bot")
 
 
 @client.event
@@ -405,4 +385,23 @@ async def on_command_error(_: commands.Context, error: Exception):  # type: igno
         print("Unknown error:", error)
 
 
-client.run(DISCORD_TOKEN)
+async def disable_and_shutdown():
+    print("Shutting down bot")
+    await client.disable_tracked_views()
+    await client.close()
+
+
+def sigint_handler() -> None:
+    # Make sure all buttons get disabled on shutdown
+    _ = client.loop.create_task(disable_and_shutdown())
+
+
+async def main():
+    # Handle loop ourself so we can install sigint handler
+    loop = asyncio.get_running_loop()
+    loop.add_signal_handler(signal.SIGINT, sigint_handler)
+    await client.start(DISCORD_TOKEN, reconnect=True)
+    print("Shutdown bot")
+
+
+asyncio.run(main())
