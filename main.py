@@ -20,6 +20,7 @@ from env_var import (
     CONSENT_URL,
     DISCORD_TOKEN,
     MAPPINGS_PATH,
+    NUM_SEARCH_CHUNKS,
     SOURCE_DIRECTORY,
 )
 from llm import LLMType
@@ -165,7 +166,7 @@ async def ask(
 
     start = timer()
     docs = await docs_db.asimilarity_search_with_relevance_scores(
-        question, filter=category.get_filter()
+        question, k=NUM_SEARCH_CHUNKS, filter=category.get_filter()
     )
     end = timer()
     retrieval_time = end - start
