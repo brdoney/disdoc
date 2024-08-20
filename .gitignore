@@ -176,3 +176,4 @@ blacklist.txt
 # Extensibility final project
 results/
 *.png
+full-mappings.json

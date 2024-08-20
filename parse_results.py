@@ -1,23 +1,24 @@
 import json
 import re
 from collections.abc import Iterable, Iterator
-from enum import Enum, auto
 from pathlib import Path
 from typing import Literal
 from typing_extensions import no_type_check, overload
 
-import matplotlib.style
+import matplotlib.pyplot as plt
 import pandas as pd
 
+from parse_utils import GraphType, remove_suffix
 from test_types import TestType
 
-matplotlib.style.use("seaborn-v0_8")
+plt.style.use("seaborn-v0_8")
 
 RESULTS = Path("./results")
 
 latency_pat = re.compile(r"Latency\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)%")
 rps_pat = re.compile(r"Req\/Sec\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)%")
 dist_pat = re.compile(r"\d+%\s+(\S+m?s)")
+req_pat = re.compile(r"Requests\/sec:\s+(\S+)")
 
 
 def pathname(p: Path) -> str:
@@ -25,15 +26,6 @@ def pathname(p: Path) -> str:
 
 
 newest = sorted(RESULTS.iterdir(), key=pathname)[-1]
-
-
-def remove_suffix(x: str) -> float:
-    if x.endswith("ms"):
-        return float(x[:-2])
-    elif x.endswith("s"):
-        return float(x[:-1]) * 1000
-    else:
-        return float(x)
 
 
 def extract_row(
@@ -70,12 +62,6 @@ def tt_prefix(s: str | list[str]) -> list[str]:
         return els
 
 
-class GraphType(Enum):
-    ABSOLUTE = auto()
-    RELATIVE = auto()
-    PERCENTAGE = auto()
-
-
 def plot_latency(df: pd.DataFrame, graph_type: GraphType) -> None:
     if graph_type is GraphType.RELATIVE:
         baseline: pd.Series[float] = df.loc["eevdf"].copy()  # type: ignore[reportAssignmentType]
@@ -90,6 +76,11 @@ def plot_latency(df: pd.DataFrame, graph_type: GraphType) -> None:
     suffix: str = " Relative to EEVDF" if graph_type is not GraphType.ABSOLUTE else ""
     y_units: str = "%" if graph_type is GraphType.PERCENTAGE else "ms"
 
+    fig, ax = plt.subplots()
+
+    if graph_type is not GraphType.ABSOLUTE:
+        ax.axhline(y=0, color="grey", linestyle="--", linewidth=1)
+
     # mapper = dict(zip(tt_prefix("Stdev (ms)"), tt_prefix("Avg (ms)")))
     # yerr = (
     #     df[tt_prefix("Stdev (ms)")].rename(columns=mapper)
@@ -98,7 +89,7 @@ def plot_latency(df: pd.DataFrame, graph_type: GraphType) -> None:
     # )
     yerr = None
 
-    ax = df.plot(
+    _ = df.plot(
         use_index=True,
         y=tt_prefix("Avg (ms)"),
         yerr=yerr,  # type: ignore[reportArgumentType]
@@ -108,8 +99,8 @@ def plot_latency(df: pd.DataFrame, graph_type: GraphType) -> None:
         xlabel="Scheduler",
         # legend=False,
         rot=45,
+        ax=ax
     )
-    fig = ax.get_figure()
     _ = ax.set_xticklabels(ax.get_xticklabels(), ha="right")  # type: ignore[reportUnknownMemberType]
     fig.savefig(f"latency-{graph_type.name.lower()}.png", bbox_inches="tight", dpi=200)  # type: ignore[reportUnknownMemberType]
 
@@ -128,7 +119,12 @@ def plot_tail_latency(df: pd.DataFrame, graph_type: GraphType) -> None:
     suffix: str = " Relative to EEVDF" if graph_type is not GraphType.ABSOLUTE else ""
     y_units: str = "%" if graph_type is GraphType.PERCENTAGE else "ms"
 
-    ax = df.plot(
+    fig, ax = plt.subplots()
+
+    if graph_type is not GraphType.ABSOLUTE:
+        ax.axhline(y=0, color="grey", linestyle="--", linewidth=1)
+
+    _ = df.plot(
         use_index=True,
         y=tt_prefix("99% (ms)"),
         kind="bar",
@@ -137,8 +133,8 @@ def plot_tail_latency(df: pd.DataFrame, graph_type: GraphType) -> None:
         xlabel="Scheduler",
         # legend=False,
         rot=45,
+        ax=ax
     )
-    fig = ax.get_figure()
     _ = ax.set_xticklabels(ax.get_xticklabels(), ha="right")  # type: ignore[reportUnknownMemberType]
     fig.savefig(  # type: ignore[reportUnknownMemberType]
         f"tail-latency-{graph_type.name.lower()}.png", bbox_inches="tight", dpi=200
@@ -159,6 +155,11 @@ def plot_requests(df: pd.DataFrame, graph_type: GraphType) -> None:
     suffix: str = " Relative to EEVDF" if graph_type is not GraphType.ABSOLUTE else ""
     y_units: str = " (%)" if graph_type is GraphType.PERCENTAGE else ""
 
+    fig, ax = plt.subplots()
+
+    if graph_type is not GraphType.ABSOLUTE:
+        ax.axhline(y=0, color="grey", linestyle="--", linewidth=1)
+
     # mapper = dict(zip(tt_prefix("Stdev"), tt_prefix("Avg")))
     # yerr = (
     #     df[tt_prefix("Stdev")].rename(columns=mapper)
@@ -167,7 +168,7 @@ def plot_requests(df: pd.DataFrame, graph_type: GraphType) -> None:
     # )
     yerr = None
 
-    ax = df.plot(
+    _ = df.plot(
         use_index=True,
         y=tt_prefix("Avg"),
         yerr=yerr,  # type: ignore[reportArgumentType]
@@ -177,9 +178,9 @@ def plot_requests(df: pd.DataFrame, graph_type: GraphType) -> None:
         xlabel="Scheduler",
         # legend=False,
         rot=45,
+        ax=ax,
     )
     _ = ax.set_xticklabels(ax.get_xticklabels(), ha="right")  # type: ignore[reportUnknownMemberType]
-    fig = ax.get_figure()
     fig.savefig(f"requests-{graph_type.name.lower()}.png", bbox_inches="tight", dpi=200)  # type: ignore[reportUnknownMemberType]
 
 
@@ -257,12 +258,18 @@ def parse_wrk(tt: TestType, result_file: Path) -> None:
         lat_m = latency_pat.search(contents)
         req_m = rps_pat.search(contents)
         dist_m = dist_pat.finditer(contents)
-        if lat_m is None or req_m is None:
+        reqt_m = req_pat.search(contents)
+        if lat_m is None or req_m is None or reqt_m is None:
             raise ValueError(f"Invalid results file {sched_dir}")
 
         add_to_dict(latency_rows, zip(lat_cols, extract_row(lat_m, dist_m)))
 
         add_to_dict(request_rows, zip(req_cols, extract_row(lat_m)))
+
+        if tt == TestType.FULL:
+            request_rows["Full Avg"][-1] = float(reqt_m.group(1))
+        else:
+            request_rows["Frontend Avg"][-1] = float(reqt_m.group(1))
 
 
 def parse_json(tt: TestType, result_file: Path) -> None:
@@ -334,11 +341,12 @@ def print_cols_sorted_percent(df: pd.DataFrame, cols: list[str], invert: bool) -
         res = make_col_sorted_percent(df[col], invert)
         # print(res.name, " ".join(res.index))
         print(res)
+        # print(res.to_latex())
 
 
-# print("Latency minimums:")
-# min_cols = tt_prefix(["Avg (ms)", "99% (ms)"])
-# print_cols_sorted_percent(latency, min_cols, True)
+print("Latency minimums:")
+min_cols = tt_prefix(["99% (ms)"])
+print_cols_sorted_percent(latency, min_cols, True)
 
 print("RPS maximums:")
 min_cols = tt_prefix("Avg")

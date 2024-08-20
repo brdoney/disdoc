@@ -239,8 +239,10 @@ def does_vectorstore_exist(
 ) -> bool:
     """Checks if vectorstore exists"""
     db = create_chroma_collection(client, embeddings)
-    if not db.get()["documents"]:
+    docs = db.get()["documents"]
+    if not docs:
         return False
+    print(len(docs))
     return True
 
 
