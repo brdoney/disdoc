@@ -1,0 +1,14 @@
+Running 30s test @ http://localhost:8080/ask
+  10 threads and 40 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     2.79s   533.59ms   3.70s    83.86%
+    Req/Sec     7.47      7.04    30.00     50.56%
+  Latency Distribution
+     50%    2.85s
+     75%    2.93s
+     90%    3.26s
+     99%    3.65s
+  409 requests in 30.04s, 1.17MB read
+Requests/sec:     13.61
+Transfer/sec:     39.74KB
+
