@@ -59,7 +59,7 @@ def load_single_document(
 
         tag = get_group(file_path)
         for doc in documents:
-            doc.metadata["group"] = tag  # type: ignore[reportUnknownMemberType]
+            doc.metadata["group"] = tag  # pyright: ignore[reportUnknownMemberType]
 
         return True, documents
 
@@ -150,13 +150,13 @@ def get_stored_file_sources(collections: list[Chroma]) -> set[str]:
     sources: set[str] = set()
     for collection in collections:
         data = collection.get()
-        sources.update([metadata["source"] for metadata in data["metadatas"]])  # type: ignore[reportAny]
+        sources.update([metadata["source"] for metadata in data["metadatas"]])  # pyright: ignore[reportAny]
     return sources
 
 
 def get_file_sources(docs: list[Document]) -> set[str]:
     """Get a set of all of the file sources for the given list."""
-    return {doc.metadata["source"] + "\n" for doc in docs}  # type: ignore[reportUnknownMemberType]
+    return {doc.metadata["source"] + "\n" for doc in docs}  # pyright: ignore[reportUnknownMemberType]
 
 
 def write_sources(docs: list[Document]) -> None:
@@ -187,9 +187,10 @@ def create_batches(
     client: chromadb.api.API, docs: list[Document]
 ) -> Iterator[list[Document]]:
     """Yield batches of documents (for ingesting) based on the client's maximum batch size."""
-    print(f"Yielding {ceil(len(docs) / client.max_batch_size)} batches")
-    for i in range(0, len(docs), client.max_batch_size):
-        yield docs[i : min(i + client.max_batch_size, len(docs))]
+    batch_size: int = client._producer.max_batch_size
+    print(f"Yielding {ceil(len(docs) / batch_size)} batches")
+    for i in range(0, len(docs), batch_size):
+        yield docs[i : min(i + batch_size, len(docs))]
 
 
 def add_documents(

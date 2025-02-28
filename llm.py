@@ -4,7 +4,7 @@ import re
 from collections.abc import AsyncIterable
 from enum import Enum, auto
 from timeit import default_timer as timer
-from typing import Any  # type: ignore[reportAny]
+from typing import Any
 
 import aiohttp
 from langchain import PromptTemplate
@@ -119,7 +119,7 @@ async def openai(
     stream = await client.chat.completions.create(
         stream=True,
         messages=[{"role": "user", "content": _get_prompt(question, context_docs)}],
-        **openai_defaults,  # type: ignore[reportAny]
+        **openai_defaults,  # pyright: ignore[reportAny]
     )
     content = ""
     async for chunk in stream:

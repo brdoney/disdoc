@@ -1,6 +1,6 @@
 from enum import Enum, auto
 import re
-from typing import Any  # type: ignore[reportAny]
+from typing import Any
 
 from env_var import SOURCE_DIRECTORY
 from typing_extensions import override

@@ -1,8 +1,8 @@
 import importlib.util
 from pathlib import Path
-from typing import Any  # type: ignore[reportAny]
+from typing import Any
 
-import fitz  # type: ignore[reportMissingTypeStubs]
+import fitz  # pyright: ignore[reportMissingTypeStubs]
 from langchain.docstore.document import Document
 from langchain.document_loaders import (
     Blob,
@@ -49,7 +49,7 @@ class MyEmailLoader(UnstructuredEmailLoader):
 class MyPyMuPDFLoader(BasePDFLoader):
     """Load `PDF` files using `PyMuPDF`."""
 
-    def __init__(self, file_path: str, **kwargs: Any) -> None:  # type: ignore[reportAny]
+    def __init__(self, file_path: str, **kwargs: Any) -> None:  # pyright: ignore[reportAny]
         """Initialize with a file path."""
         if importlib.util.find_spec("fitz") is None:
             raise ImportError(

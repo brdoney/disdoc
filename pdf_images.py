@@ -1,6 +1,5 @@
-# type: ignore[reportUnknownMemberType]
 from typing import cast
-import fitz  # type: ignore[reportMissingTypeStubs]
+import fitz  # pyright: ignore[reportMissingTypeStubs]
 import langchain.schema
 import uuid
 import os
@@ -36,7 +35,7 @@ def get_cropped_image(search_results: list[fitz.Rect], page: fitz.Page) -> str:
         overall |= rect
 
     # Set cropbox so no content shows in padded area
-    page.set_cropbox(overall)  # type: ignore[reportUnknownMemberType]
+    page.set_cropbox(overall)  # pyright: ignore[reportUnknownMemberType]
 
     # Add padding so that we'll have some space after clipping
     padding = 10
@@ -99,7 +98,7 @@ def pdf_image(
     if key in __cached_images:
         return Path(__cached_images[key]), True
 
-    with fitz.open(doc_path) as pdf:  # type: ignore
+    with fitz.open(doc_path) as pdf:
         pdf = cast(fitz.Document, pdf)
 
         # print(page.get_textpage().extractText())

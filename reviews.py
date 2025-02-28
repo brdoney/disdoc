@@ -102,8 +102,8 @@ class RetrievalReviewView(ReviewView):
             self.post_id,
             self.user,
             resubmitting,
-            self.relevance,  # type: ignore[reportArgumentType]
-            self.helpfulness,  # type: ignore[reportArgumentType]
+            self.relevance,  # pyright: ignore[reportArgumentType]
+            self.helpfulness,  # pyright: ignore[reportArgumentType]
         )
 
     @discord.ui.select(
@@ -160,9 +160,9 @@ class LLMReviewView(ReviewView):
             self.post_id,
             self.user,
             resubmitting,
-            self.relevance,  # type: ignore[reportArgumentType]
-            self.helpfulness,  # type: ignore[reportArgumentType]
-            self.correctness,  # type: ignore[reportArgumentType]
+            self.relevance,  # pyright: ignore[reportArgumentType]
+            self.helpfulness,  # pyright: ignore[reportArgumentType]
+            self.correctness,  # pyright: ignore[reportArgumentType]
         )
 
     @discord.ui.select(
