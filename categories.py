@@ -25,6 +25,7 @@ class DocGroup(Enum):
     """Adminstrative materials, including the syllabus and course policies"""
     material = auto()
     """Course materials, including lectures, example code, articles, and FAQs"""
+    # manpages = auto()
 
     @override
     def __str__(self) -> str:
@@ -32,7 +33,7 @@ class DocGroup(Enum):
         return f"{self.name}"
 
     @classmethod
-    def check_members(cls):
+    def check_members(cls) -> None:
         exp_groups: set[str] = set()
         for group_dir in SOURCE_DIRECTORY.iterdir():
             group = group_dir.relative_to(SOURCE_DIRECTORY).parts[0]
@@ -40,9 +41,16 @@ class DocGroup(Enum):
 
         found_groups = set(str(member) for member in cls)
 
-        assert (
-            exp_groups == found_groups
-        ), f"{cls} needs to be updated. Found members {found_groups}, but expected {exp_groups}."
+        unexpected = found_groups.difference(exp_groups)
+        not_found = exp_groups.difference(found_groups)
+
+        error_msg = f"{cls} needs to be updated."
+        if unexpected:
+            error_msg += f" Found the following unexpected members: {unexpected}."
+        if not_found:
+            error_msg += f" Could not find the following expected members: {not_found}."
+
+        assert exp_groups == found_groups, error_msg
 
     def get_filter(self) -> dict[str, Any]:
         """Gets the Chroma filter to use for a particular group."""
