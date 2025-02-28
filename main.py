@@ -3,7 +3,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 from timeit import default_timer as timer
-from typing import Any  # type: ignore[reportAny]
+from typing import Any  # pyright: ignore[reportAny]
 from urllib.parse import ParseResult, parse_qsl, urlencode, urlparse
 import signal
 
@@ -134,6 +134,8 @@ class EmbedRecord(DataClassJsonMixin):
 @dataclass
 class AskRecord(DataClassJsonMixin):
     post_id: int
+    category: str
+    question: str
     embeds: list[EmbedRecord]
     answer: str | None = None
 
@@ -164,6 +166,7 @@ async def ask(
     # Defer b/c loading vector DB from scratch takes longer than discord's response timeout
     await interaction.response.defer(thinking=True)
 
+    # print("Starting search")
     start = timer()
     docs = await docs_db.asimilarity_search_with_relevance_scores(
         question, k=NUM_SEARCH_CHUNKS, filter=category.get_filter()
@@ -177,7 +180,7 @@ async def ask(
     files: list[discord.File] = []
     new_images = False
     for i, (doc, score) in enumerate(docs):
-        source = Path(doc.metadata["source"])  # type: ignore[reportUnknownMemberType]
+        source = Path(doc.metadata["source"])  # pyright: ignore[reportUnknownMemberType]
 
         dest_url_str = NAME_TO_URL[str(remove_group(source))]
         dest_url = urlparse(dest_url_str)
@@ -199,7 +202,7 @@ async def ask(
 
         if ext == ".pdf":
             # Page numbers start at 0 internally, but 1 in links
-            page = int(doc.metadata["page"]) + 1  # type: ignore[reportUnknownMemberType]
+            page = int(doc.metadata["page"]) + 1  # pyright: ignore[reportUnknownMemberType]
             dest_url = dest_url._replace(fragment=f"page={page}")
             title += f" - page {page}"
 
@@ -290,9 +293,9 @@ async def ask(
 
         log_post_times(post_id, retrieval_time, generation_time)
 
-        record = AskRecord(post_id, embed_records, answer_text)
+        record = AskRecord(post_id, str(category), question, embed_records, answer_text)
         with (RECORDS_DIR / f"post_{post_id}.json").open("w") as f:
-            s = record.to_json(indent=2)  # type: ignore[reportUnknownMemberType]
+            s = record.to_json(indent=2)  # pyright: ignore[reportUnknownMemberType]
             _ = f.write(s)
 
 
@@ -379,7 +382,7 @@ async def shutdown(interaction: discord.Interaction):
 
 
 @client.event
-async def on_command_error(_: commands.Context, error: Exception):  # type: ignore[reportMissingTypeArgument]
+async def on_command_error(_: commands.Context, error: Exception):  # pyright: ignore[reportMissingTypeArgument]
     if isinstance(error, discord.HTTPException):
         print("Hit ratelimit:", error)
     else:
